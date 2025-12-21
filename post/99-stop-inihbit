@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+setup_inhibitor() {
+    log "[setup_inhibitor] Stopping systemd inhibitor"
+
+    # Stop the systemd inhibitor we started earlier.
+    if [ -n "${TIK_INHIBIT_PID}" ] && kill -0 "${TIK_INHIBIT_PID}" 2>/dev/null; then
+        kill "${TIK_INHIBIT_PID}" 2>/dev/null || :;
+    fi
+    log "[setup_inhibitor] Inhibitor stopped"
+}
+
+setup_inhibitor

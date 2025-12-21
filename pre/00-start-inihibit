@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+setup_inhibitor() {
+    log "[setup_inhibitor] Starting systemd inhibitor for installation session"
+
+    # Start a systemd inhibitor in the background and keep it alive.
+    # systemd-inhibit only works while the child command is running.
+    systemd-inhibit \
+        --what=idle:sleep:shutdown \
+        --who="tik" \
+        --why="Installation in progress" \
+        --mode=block \
+        /usr/bin/cat >/dev/null 2>&1 &
+    TIK_INHIBIT_PID=$!
+    export TIK_INHIBIT_PID
+    log "[setup_inhibitor] Inhibitor started (pid=${TIK_INHIBIT_PID})"
+}
+
+setup_inhibitor
