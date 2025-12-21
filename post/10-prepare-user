@@ -5,11 +5,29 @@
 prepare_user() {
     tik_progress_step "Adding user" 10
     tik_target_mount "" "required"
+
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
+
+    # Fix SELinux labels for passwd/shadow using the target system's file_contexts
+    # so passwd can modify them while SELinux stays enforcing.
+    local selinux_cfg selinux_type fc_txt
+    selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
+    selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
+
+    fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
+    prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
+
+    # Required to allow password changes
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d deck 1>&2
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d root 1>&2
+
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
+
+    # Force a relabel on first boot
+    prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2 || true
+
     log "[prepare-user] Enable autologin for user"
     prun /usr/bin/sed -i 's/DISPLAYMANAGER_AUTOLOGIN=.*/DISPLAYMANAGER_AUTOLOGIN="deck"/' "${TIK_ROOT_MNT}/etc/sysconfig/displaymanager"
-
 }
 
 prepare_user

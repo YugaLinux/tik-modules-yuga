@@ -8,43 +8,43 @@ configure_factory_reset() {
 
     tik_progress_step "Backup snapshot configs" 25
 
-    prun /usr/bin/mkdir "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/"
-    prun /usr/bin/mkdir "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/"
+    prun /usr/bin/mkdir "${TIK_ROOT_MNT}/.snapshots/.ori/"
+    prun /usr/bin/mkdir "${TIK_ROOT_MNT}/.snapshots/.fr/"
 
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/.snapshots/1/snapshot" "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot"
-    prun /usr/bin/cp "${TIK_ROOT_DEV}/mnt/.snapshots/1/info.xml" "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/info.xml"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/.snapshots/1/snapshot" "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot"
+    prun /usr/bin/cp "${TIK_ROOT_MNT}/.snapshots/1/info.xml" "${TIK_ROOT_MNT}/.snapshots/.ori/info.xml"
 
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot"
-    prun /usr/bin/cp "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/info.xml" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/info.xml"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot" "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot"
+    prun /usr/bin/cp "${TIK_ROOT_MNT}/.snapshots/.ori/info.xml" "${TIK_ROOT_MNT}/.snapshots/.fr/info.xml"
 
     tik_progress_step "Backup /etc" 40
-    prun /usr/bin/rm -rf "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot/etc"
-    prun /usr/bin/rm -rf "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot/etc"
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/.snapshots/1/snapshot/etc" "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot/etc"
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot/etc" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot/etc"
+    prun /usr/bin/rm -rf "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot/etc"
+    prun /usr/bin/rm -rf "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot/etc"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/.snapshots/1/snapshot/etc" "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot/etc"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot/etc" "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot/etc"
 
     tik_progress_step "Backup snapshots" 55
     for dir in "${directories[@]}"
     do
-        prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/mnt/@/$dir" "${TIK_ROOT_DEV}/mnt/mnt/@/.${dir}ori"
-        prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/mnt/@/.${dir}ori" "${TIK_ROOT_DEV}/mnt/mnt/@/.${dir}fr"
-        prun /usr/bin/sed -i "s|subvol=@/$dir|subvol=@/.${dir}fr|g" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot/etc/fstab"
+        prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/mnt/$dir" "${TIK_ROOT_MNT}/mnt/.${dir}ori"
+        prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/mnt/.${dir}ori" "${TIK_ROOT_MNT}/mnt/.${dir}fr"
+        prun /usr/bin/sed -i "s|subvol=@/$dir|subvol=@/.${dir}fr|g" "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot/etc/fstab"
     done
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/mnt/@/usr/local" "${TIK_ROOT_DEV}/mnt/mnt/@/usr/.localori"
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/mnt/@/usr/.localori" "${TIK_ROOT_DEV}/mnt/mnt/@/usr/.localfr"
-    prun /usr/bin/sed -i "s|subvol=@/usr/local|subvol=@/usr/.localfr|g" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot/etc/fstab"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/mnt/usr/local" "${TIK_ROOT_MNT}/mnt/usr/.localori"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/mnt/usr/.localori" "${TIK_ROOT_MNT}/mnt/usr/.localfr"
+    prun /usr/bin/sed -i "s|subvol=@/usr/local|subvol=@/usr/.localfr|g" "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot/etc/fstab"
 
-    prun /usr/sbin/btrfs subvolume create "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bori"
+    prun /usr/sbin/btrfs subvolume create "${TIK_ROOT_MNT}/.snapshots/.fr/bori"
 
     # TODO: Only backup Yuga parts
     tik_progress_step "Backup EFI partition" 70
-    prun /usr/bin/cp -r "${TIK_ROOT_DEV}/mnt/boot/efi" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bori"
-    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bori" "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bfr"
+    prun /usr/bin/cp -r "${TIK_ROOT_MNT}/boot/efi" "${TIK_ROOT_MNT}/.snapshots/.fr/bori"
+    prun /usr/sbin/btrfs subvolume snapshot "${TIK_ROOT_MNT}/.snapshots/.fr/bori" "${TIK_ROOT_MNT}/.snapshots/.fr/bfr"
 
     tik_progress_step "Finalizing boot entries" 80
-    for file in "${TIK_ROOT_DEV}"/mnt/boot/efi/loader/entries/*
+    for file in "${TIK_ROOT_MNT}"/boot/efi/loader/entries/*
     do
-        frpath="/mnt/.snapshots/.fr/bfr/efi/loader/entries/$(basename "$file")"
+        frpath="${TIK_ROOT_MNT}/.snapshots/.fr/bfr/efi/loader/entries/$(basename "$file")"
         # Check if it's a regular file
         if [ -f "$frpath" ]; then
             prun /usr/bin/sed -i "s/subvol=@\/.snapshots\/1/subvol=@\/.snapshots\/.fr/g" "$frpath"
@@ -52,11 +52,11 @@ configure_factory_reset() {
     done
 
     tik_progress_step "Finalizing configs" 95
-    prun /usr/bin/touch "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot/.factory_reset"
-    prun /usr/sbin/btrfs property set "${TIK_ROOT_DEV}/mnt/.snapshots/.ori/snapshot" ro true
-    prun /usr/sbin/btrfs property set "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/snapshot" ro true
-    prun /usr/sbin/btrfs property set "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bori" ro true
-    prun /usr/sbin/btrfs property set "${TIK_ROOT_DEV}/mnt/.snapshots/.fr/bfr" ro true
+    prun /usr/bin/touch "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot/.factory_reset"
+    prun /usr/sbin/btrfs property set "${TIK_ROOT_MNT}/.snapshots/.ori/snapshot" ro true
+    prun /usr/sbin/btrfs property set "${TIK_ROOT_MNT}/.snapshots/.fr/snapshot" ro true
+    prun /usr/sbin/btrfs property set "${TIK_ROOT_MNT}/.snapshots/.fr/bori" ro true
+    prun /usr/sbin/btrfs property set "${TIK_ROOT_MNT}/.snapshots/.fr/bfr" ro true
 
     tik_unmount "${TIK_ROOT_MNT}/mnt"
 }

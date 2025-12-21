@@ -6,12 +6,7 @@ setup_inhibitor() {
 
     # Start a systemd inhibitor in the background and keep it alive.
     # systemd-inhibit only works while the child command is running.
-    systemd-inhibit \
-        --what=idle:sleep:shutdown \
-        --who="tik" \
-        --why="Installation in progress" \
-        --mode=block \
-        /usr/bin/cat >/dev/null 2>&1 &
+    systemd-inhibit --what=idle:sleep:shutdown --who="tik" --why="Installation in progress" --mode=block /usr/bin/sleep infinity >/dev/null 2>&1 &
     TIK_INHIBIT_PID=$!
     export TIK_INHIBIT_PID
     log "[setup_inhibitor] Inhibitor started (pid=${TIK_INHIBIT_PID})"
