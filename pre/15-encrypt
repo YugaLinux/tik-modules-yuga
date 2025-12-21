@@ -27,7 +27,7 @@ verify_tpm() {
         else
             # PolicyAuthorizeNV not found, set encryption mode to fallback
             tik_encrypt_mode=1
-            log "[verify_tpm] PolicyAuthorizeNV support not foun10-welcomed, Fallback Mode set"
+            log "[verify_tpm] PolicyAuthorizeNV support not found, Fallback Mode set"
         fi
     else
         # TPM 2.0 not found, set encryption mode to fallback

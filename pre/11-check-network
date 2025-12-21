@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+
+# Check internet connection
+while ! ping -c 1 1.1.1.1 &> /dev/null; do
+    log "[check-network] No internet connection. Prompting user to establish a connection..."
+    d --warning --no-wrap --title="No Internet Connection" --text="An Internet connection is required for installation.\n\nPlease establish an internet connection and stay connected until the installation completed. Click OK to continue."
+done
+
+log "[check-network] Internet connection is active."
