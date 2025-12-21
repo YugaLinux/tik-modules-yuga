@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
 
-
+# TODO: Move to tik itself
 # Check internet connection
 while ! ping -c 1 1.1.1.1 &> /dev/null; do
     log "[check-network] No internet connection. Prompting user to establish a connection..."

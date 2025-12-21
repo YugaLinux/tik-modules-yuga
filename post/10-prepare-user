@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+# TODO: Make more generic
+prepare_user() {
+    tik_progress_step "Adding user" 10
+    tik_target_mount "" "required"
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
+    log "[prepare-user] Enable autologin for user"
+    prun /usr/bin/sed -i 's/DISPLAYMANAGER_AUTOLOGIN=""/DISPLAYMANAGER_AUTOLOGIN="deck"/' "${TIK_ROOT_MNT}/etc/sysconfig/displaymanager"
+
+}
+
+prepare_user
+tik_progress_step "User added" 100
