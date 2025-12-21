@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+intall_packages() {
+    tik_progress_step "Installing required packages" 10
+    tik_target_mount "" "required"
+    prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/" ro false
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" /usr/bin/env DISABLE_SNAPPER_ZYPP_PLUGIN=1 /usr/bin/zypper --non-interactive install patterns-yuga-nonredistributable 1>&2
+    prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/" ro true
+}
+
+intall_packages
+tik_progress_step "All packages installed" 100
