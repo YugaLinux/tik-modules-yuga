@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+
+setup_swap_and_hibernate() {
+    tik_progress_step "Setting up swap + hibernation" 0
+    tik_target_mount "" "required"
+
+    # Where the swapfile should live in the installed target
+    local swap_dir="${TIK_ROOT_MNT}/swap"
+    local fstab="${TIK_ROOT_MNT}/etc/fstab"
+    local cmdline="${TIK_ROOT_MNT}/etc/kernel/cmdline"
+
+    # Determine RAM size from the running installer environment (hardware RAM)
+    # MemTotal is in kB.
+    local mem_kb mem_gib swap_gib
+    mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+    [ -n "${mem_kb}" ] || error "[swap] Could not read MemTotal from /proc/meminfo"
+
+    # ceil(kB -> GiB): (mem_kb + 1024*1024 - 1) / (1024*1024)
+    mem_gib="$(( (mem_kb + 1048576 - 1) / 1048576 ))"
+
+    # Hibernation safety margin: +1 GiB
+    swap_gib="$(( mem_gib + 1 ))"
+    if [ "${swap_gib}" -lt 2 ]; then
+        swap_gib=2
+    fi
+
+    log "[swap] Detected RAM: ~${mem_gib} GiB; creating swap: ${swap_gib} GiB"
+
+    # Ensure /swap exists on target
+    if [ ! -d "${swap_dir}" ]; then
+        prun /usr/bin/mkdir -p "${swap_dir}"
+    fi
+
+    tik_progress_step "Creating swapfile" 20
+    # Btrfs swapfile creation
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" /usr/sbin/btrfs filesystem mkswapfile --size "${swap_gib}g" /swap/swapfile 1>&2
+
+    # Ensure /etc/fstab has the swapfile line
+    tik_progress_step "Configuring fstab" 40
+    if [ ! -f "${fstab}" ]; then
+        prun /usr/bin/touch "${fstab}"
+    fi
+
+    echo "/swap/swapfile none swap defaults 0 0" | prun /usr/bin/tee -a "${fstab}" >/dev/null
+
+    # Compute resume_offset
+    tik_progress_step "Computing hibernation resume offset" 60
+    local resume_offset
+    resume_offset="$(prun /usr/bin/chroot "${TIK_ROOT_MNT}" /usr/sbin/btrfs inspect-internal map-swapfile -r /swap/swapfile 2>/dev/null | head -n1)"
+
+    [ -n "${resume_offset}" ] || error "[swap] Could not determine resume_offset for /swap/swapfile"
+
+    # Determine UUID for resume= (device containing the swapfile).
+    local root_uuid
+
+    root_uuid="$(lsblk -n -r -o UUID "${TIK_ROOT_DEV}" | head -n1)"
+    [ -n "${root_uuid}" ] || error "[swap] Could not determine UUID for resume device: ${TIK_ROOT_DEV}"
+
+    # Append resume parameters to /etc/kernel/cmdline (idempotent)
+    tik_progress_step "Writing kernel resume parameters" 80
+    prun /usr/bin/mkdir -p "$(dirname "${cmdline}")"
+    if [ ! -f "${cmdline}" ]; then
+        prun /usr/bin/touch "${cmdline}"
+    fi
+
+    # Append cmdline
+    echo "$(cat "${cmdline}") resume=UUID=${root_uuid} resume_offset=${resume_offset}" | prun /usr/bin/tee "${cmdline}" >/dev/null
+
+    log "[swap] resume=UUID=${root_uuid} resume_offset=${resume_offset}"
+
+    tik_progress_step "Swap + hibernation configured" 100
+    log "[swap] Swap + hibernation configuration complete"
+}
+
+setup_swap_and_hibernate
