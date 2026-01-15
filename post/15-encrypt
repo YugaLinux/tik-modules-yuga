@@ -144,11 +144,8 @@ select_keyboard_layout() {
 
     [ -n "${tik_kbd_layout}" ] || error "No keyboard layout selected"
 
-    logging=false
-    d_opt --entry --width=500 --title="Keyboard variant (optional)" \
-        --text="Optional: Enter a keyboard variant (leave empty if you don't need one).\n\nExamples: nodeadkeys, intl, us\n\nIf you're unsure, leave it empty."
-    tik_kbd_variant="${result}"
-    logging=true
+    # Use default variant
+    tik_kbd_variant=""
 
     set_keyboard_layout_session "${tik_kbd_layout}" "${tik_kbd_variant}"
 }
@@ -242,9 +239,9 @@ prompt_passphrase_gamepad() {
           --text="A supported controller has been detected.\n\nYou will now enter the passphrase using the gamepad.\n\n$(passphrase_policy_text)"
     fi
 
-    (
-      /usr/bin/deckrypt -f -c -a > "${passphrase_file}"
-    ) & local deckrypt_pid=$!
+    # deckrypt must be started in the background before any password can be entered with the gamepad
+    /usr/bin/deckrypt -f -c -a > "${passphrase_file}" &
+    local deckrypt_pid=$!
 
     local key1 key2 retval imsg=""
     local -a deckrypt_lines1=() deckrypt_lines2=()

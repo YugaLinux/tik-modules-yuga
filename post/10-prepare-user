@@ -19,9 +19,8 @@ prepare_user() {
 
     # Required to allow password changes
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d deck 1>&2
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d root 1>&2
 
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel,games deck 1>&2
 
     # Force a relabel on first boot
     prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2 || true
