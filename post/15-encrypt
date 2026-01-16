@@ -19,13 +19,14 @@
 #   - Remove the temporary key-file and replace it either with TPM enrollment or a user-supplied passphrase (add_key)
 # It is expected the LUKS2 partition is already encrypted with a key-file in the only populated keyslot.
 
-tik_kbd_layout=""
-tik_kbd_variant=""
+tik_passphrase=""
+tik_recovery_gamepad_inputs=""
+tik_deckrypt_matched_line=""
 
-tik_allowed_symbols=", . : ; ! ? @ # \$ % ^ & * ( ) - _ + = / \\"
+tik_allowed_symbols=", . : ; ! ? @ # \$ % ^ &amp; * ( ) - _ + = / &#92;"
 tik_allowed_symbols_class="[,.:;!?@#\\$%\\^&\\*\\(\\)\\-_\\+=/\\\\]"
 
-validate_passphrase() {
+validate_passphrase_keyboard() {
     local pw="${1}"
     [ "${#pw}" -ge 8 ] || return 1
     [[ "${pw}" =~ [a-z] ]] || return 1
@@ -36,68 +37,56 @@ validate_passphrase() {
     return 0
 }
 
-passphrase_policy_text() {
-    cat <<EOF
-Passphrase rules:
-
-• At least 8 characters
-• At least one lowercase letter (a-z)
-• At least one uppercase letter (A-Z)
-• At least one number (0-9)
-• At least one symbol from this allowed list:
-  ${tik_allowed_symbols}
-
-Spaces are not allowed.
-EOF
+validate_passphrase_gamepad() {
+    local pw="${1}"
+    [ "${#pw}" -ge 8 ] || return 1
+    return 0
 }
+
+passphrase_policy_text_keyboard="We recommend that your password fulfills these rules:\n\n• At least 8 characters\n• At least one lowercase letter (a-z)\n• At least one uppercase letter (A-Z)\n• At least one number (0-9)\n• At least one symbol from this list:\n  ${tik_allowed_symbols}\n\nSpaces are not allowed."
+passphrase_policy_text_gamepad="We recommend that your password fulfills these rules:\n\n• At least 8 characters"
 
 detect_wayland_compositor() {
     # Return values: kwin | mutter | unknown
     if pgrep -x kwin_wayland >/dev/null 2>&1 || pgrep -x kwin_wayland_wrapper >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] kwin detected"
         echo "kwin"
         return 0
     fi
     if pgrep -x gnome-shell >/dev/null 2>&1 || pgrep -x mutter >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] mutter detected"
         echo "mutter"
         return 0
     fi
+    log "[detect_wayland_compositor] no known compositor detected"
     echo "unknown"
 }
 
 set_keyboard_layout_session() {
     local layout="${1}"
-    local variant="${2}"
 
     # Best effort for the current installer session.
     # On Wayland, the compositor owns layout state; setxkbmap only affects Xwayland.
     local comp
     comp="$(detect_wayland_compositor)"
 
+    log "[set_keyboard_layout_session] setting keyboard layout for current session"
+
     if [ "${XDG_SESSION_TYPE}" = "wayland" ]; then
         if [ "${comp}" = "kwin" ] && command -v kwriteconfig6 >/dev/null 2>&1; then
             # KDE Plasma Wayland
             kwriteconfig6 --file kxkbrc --group Layout --key Use true --notify >/dev/null 2>&1 || true
             kwriteconfig6 --file kxkbrc --group Layout --key LayoutList "${layout}" --notify >/dev/null 2>&1 || true
-            kwriteconfig6 --file kxkbrc --group Layout --key VariantList "${variant}" --notify >/dev/null 2>&1 || true
             kwriteconfig6 --file kxkbrc --group Layout --key Options "" --notify >/dev/null 2>&1 || true
         elif [ "${comp}" = "mutter" ] && command -v gsettings >/dev/null 2>&1; then
             # GNOME (mutter)
-            if [ -n "${variant}" ]; then
-                gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}+${variant}')]" >/dev/null 2>&1 || \
-                gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}')]" >/dev/null 2>&1 || true
-            else
-                gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}')]" >/dev/null 2>&1 || true
-            fi
+            gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}')]" >/dev/null 2>&1 || true
         fi
     fi
 
     # Also set system defaults
     if command -v localectl >/dev/null 2>&1; then
-        if [ -n "${variant}" ]; then
-            localectl set-x11-keymap "${layout}" "" "${variant}" "" >/dev/null 2>&1 || true
-        else
-            localectl set-x11-keymap "${layout}" >/dev/null 2>&1 || true
-        fi
+        localectl set-x11-keymap "${layout}" >/dev/null 2>&1 || true
         # Ensure console keymap follows
         localectl set-keymap "${layout}" >/dev/null 2>&1 || true
     fi
@@ -105,23 +94,20 @@ set_keyboard_layout_session() {
 
 set_keyboard_layout_installed_system() {
     local layout="${1}"
-    local variant="${2}"
+
+    log "[set_keyboard_layout_installed_system] setting keyboard layout in the final system"
 
     # Configure early-boot and X11 for installed system
     if command -v localectl >/dev/null 2>&1; then
-        if [ -n "${variant}" ]; then
-            localectl --root="${TIK_ROOT_MNT}" set-x11-keymap "${layout}" "" "${variant}" "" >/dev/null 2>&1 || true
-        else
-            localectl --root="${TIK_ROOT_MNT}" set-x11-keymap "${layout}" >/dev/null 2>&1 || true
-        fi
+        localectl --root="${TIK_ROOT_MNT}" set-x11-keymap "${layout}" >/dev/null 2>&1 || true
         # This also writes ${TIK_ROOT_MNT}/etc/vconsole.conf
         localectl --root="${TIK_ROOT_MNT}" set-keymap "${layout}" >/dev/null 2>&1 || true
     fi
 }
 
 select_keyboard_layout() {
-    tik_progress_step "Selecting keyboard layout" 0
-    log "[select_keyboard_layout] selecting keyboard layout for passphrase entry"
+    tik_progress_step "Selecting keyboard layout" 15
+    log "[select_keyboard_layout] selecting keyboard layout"
 
     local layouts=()
     if command -v localectl >/dev/null 2>&1; then
@@ -134,7 +120,6 @@ select_keyboard_layout() {
     fi
 
     logging=false
-    # zenity-like list via d_opt; expects result in ${result}
     d_opt --list --width=500 --height=500 \
         --title="Keyboard layout" \
         --text="Select the keyboard layout you will use to enter passphrases.\n\nThis will be applied now and configured for early boot on the installed system." \
@@ -144,125 +129,169 @@ select_keyboard_layout() {
 
     [ -n "${tik_kbd_layout}" ] || error "No keyboard layout selected"
 
-    # Use default variant
-    tik_kbd_variant=""
-
-    set_keyboard_layout_session "${tik_kbd_layout}" "${tik_kbd_variant}"
+    set_keyboard_layout_session "${tik_kbd_layout}"
 }
 
 prompt_passphrase_keyboard() {
     local title="${1}"
-    local intro_text="${2}"
+    local title_repeat="${2}"
+    local intro_text="${3}"
     local pw=""
     local pw_check=""
+    local prompt1_text="${intro_text}\n\n${passphrase_policy_text_keyboard}\n\nClick OK to finish your input."
+    local prompt2_text="Repeat the passphrase.\n\n${passphrase_policy_text_keyboard}\n\nClick OK to finish your input."
 
     while true; do
+        log "[prompt_passphrase_keyboard] prompting the user to enter a password"
         logging=false
-        d_opt --password --width=500 --title="${title}" --text="${intro_text}\n\n$(passphrase_policy_text)\n\nEnter passphrase:"
+        d_opt --forms --width=500 --add-password="Password:" --text="${prompt1_text}" --title="${title}"
         pw="${result}"
-        d_opt --password --width=500 --title="${title}" --text="Type passphrase again:"
+        d_opt --forms --width=500 --add-password="Password:" --text="${prompt2_text}" --title="${title}"
         pw_check="${result}"
         logging=true
 
         # User cancelled both dialogs -> treat as cancel
         if [ -z "${pw}" ] && [ -z "${pw_check}" ]; then
-            echo ""
-            return 0
+            log "[prompt_passphrase_keyboard] password prompts cancelled"
+            pw=""
+            break
         fi
 
         if [ "${pw}" != "${pw_check}" ]; then
+            log "[prompt_passphrase_keyboard] passphrases did not match"
             d --warning --no-wrap --title="Passphrase did not match" --text="Please try again"
             pw=""
             pw_check=""
             continue
         fi
 
-        if ! validate_passphrase "${pw}"; then
-            d --warning --no-wrap --title="Passphrase does not meet requirements" --text="$(passphrase_policy_text)"
+        if ! validate_passphrase_keyboard "${pw}"; then
+            log "[prompt_passphrase_keyboard] passphrase invalid"
+            # Allow user to keep an "insecure" passphrase if they insist.
+            local rv=0
+            logging=false
+            d_opt --question --width=500 --title="Passphrase does not meet recommended rules" \
+                --ok-label="Try again" --cancel-label="Use anyway" \
+                --text="${passphrase_policy_text_keyboard}\n\nDo you want to use this passphrase anyway?"
+            rv=$?
+            logging=true
+
+            if [ "${rv}" -ne 0 ]; then
+                log "[prompt_passphrase_keyboard] invalid passphrase kept"
+                break
+            fi
+
             pw=""
             pw_check=""
+            log "[prompt_passphrase_keyboard] invalid passphrase reset"
             continue
         fi
 
-        echo "${pw}"
-        return 0
+        break
     done
+
+    tik_passphrase="${pw}"
+    log "[prompt_passphrase_keyboard] passphrase set"
+    return 0
 }
 
-deckrypt_supported_controller_present() {
-    local retval=0
-    /usr/bin/deckrypt -t >/dev/null 2>&1 || retval=$?
-    [ "${retval}" -eq 0 ]
+deckrypt_start() {
+    local outfile="$1"
+    local _pidvar="$2"
+
+    [ -n "$outfile" ] || return 1
+    rm -f "$outfile"
+    : > "$outfile"
+
+    log "[deckrypt_start] Starting deckrypt"
+    (
+        exec /usr/bin/deckrypt -f -c -a > "$outfile"
+    ) &
+
+    local newpid=$!
+    printf -v "$_pidvar" '%s' "$newpid"
+    return 0
+}
+
+deckrypt_stop() {
+    local pid="$1"
+    [ -n "$pid" ] || return 0
+
+    log "[deckrypt_stop] Stopping deckrypt"
+
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+    return 0
+}
+
+deckrypt_ensure_running() {
+    local outfile="$1"
+    local _pidvar="$2"
+
+    local pid=""
+    pid="${!_pidvar}"
+
+    # Is the PID alive?
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        log "[deckrypt_ensure_running] deckrypt still running"
+        return 0
+    fi
+
+    log "[deckrypt_ensure_running] deckrypt not running, starting"
+    # Not running -> (re)start
+    deckrypt_start "$outfile" "$_pidvar"
 }
 
 prompt_passphrase_gamepad() {
     local title="${1}"
-    local intro_text="${2}"
+    local title_repeat="${2}"
+    local intro_text="${3}"
 
     local passphrase_file="/tmp/deckrypt_passphrase"
     local passphrase_file_clean="/tmp/deckrypt_passphrase_clean"
+    local pw=""
+    local pw_check=""
+    local deckrypt_pid=""
 
     rm -f "${passphrase_file}" "${passphrase_file_clean}"
     true > "${passphrase_file}"
 
-    local device_info ret_d
-    device_info="$(/usr/bin/deckrypt -d -a 2>/dev/null)"
-    ret_d=$?
-
-    local sysvendor productname
-    sysvendor="$(/usr/bin/cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '')"
-    productname="$(/usr/bin/cat /sys/class/dmi/id/product_name 2>/dev/null || echo '')"
-
-    local matched_line=""
-    while IFS= read -r line; do
-        local vendor product
-        vendor="$(echo "$line" | grep -oP "Vendor:\s*'\K[^']+" || true)"
-        product="$(echo "$line" | grep -oP "Product:\s*'\K[^']+" || true)"
-        if [ "$vendor" = "$sysvendor" ] && [ "$product" = "$productname" ]; then
-            matched_line="$line"
-            break
-        fi
-    done <<< "$device_info"
-
-    local devname shift alternate enter instructions
-    if [ "${ret_d}" -eq 0 ] && [ -n "${matched_line}" ]; then
-        devname="$(echo "${matched_line}" | grep -oP "Device:\s*'\K[^']+" || true)"
-        shift="$(echo "${matched_line}" | grep -oP "Shift:\s*'\K[^']+" || true)"
-        alternate="$(echo "${matched_line}" | grep -oP "Alternate:\s*'\K[^']+" || true)"
-        enter="$(echo "${matched_line}" | grep -oP "Enter:\s*'\K[^']+" || true)"
-        instructions="$(echo "${matched_line}" | grep -oP "Instructions:\s*'\K[^']+" || true)"
-
-        d --width=500 --warning --title="Gamepad input" \
-          --text="We detected that you are running the installer on your <b>${devname}</b>.\n\nYou will now enter the passphrase using the gamepad.\n\n$(passphrase_policy_text)"
-    else
-        d --width=500 --warning --title="Gamepad input" \
-          --text="A supported controller has been detected.\n\nYou will now enter the passphrase using the gamepad.\n\n$(passphrase_policy_text)"
-    fi
-
-    # deckrypt must be started in the background before any password can be entered with the gamepad
-    /usr/bin/deckrypt -f -c -a > "${passphrase_file}" &
-    local deckrypt_pid=$!
-
-    local key1 key2 retval imsg=""
+    local imsg=""
     local -a deckrypt_lines1=() deckrypt_lines2=()
     local -a final_arr1=() final_arr2=()
 
-    local gmsg=""
-    [ -n "${enter}" ] && gmsg="${gmsg}\n• <b>ENTER</b>: ${enter}"
-    [ -n "${shift}" ] && gmsg="${gmsg}\n• <b>SHIFT</b>: ${shift}"
-    [ -n "${alternate}" ] && gmsg="${gmsg}\n• <b>ALTERNATE</b>: ${alternate}"
+    local shift alternate enter instructions
+    shift="$(echo "${tik_deckrypt_matched_line}" | grep -oP "Shift:\s*'\K[^']+" || true)"
+    alternate="$(echo "${tik_deckrypt_matched_line}" | grep -oP "Alternate:\s*'\K[^']+" || true)"
+    enter="$(echo "${tik_deckrypt_matched_line}" | grep -oP "Enter:\s*'\K[^']+" || true)"
+    instructions="$(echo "${tik_deckrypt_matched_line}" | grep -oP "Instructions:\s*'\K[^']+" || true)"
 
-    local base_instructions="Every gamepad button/axis results in one character and cannot be combined.\n\nThese inputs have special meaning:${gmsg}\n\n• Press and hold SHIFT or ALTERNATE and press a regular input to create a different character.\n• Press ENTER on its own to emulate pressing the enter key.\n• Press and hold SHIFT or ALTERNATE and press ENTER to delete the last character."
+    local gmsg=""
+    [ -n "${enter}" ] && gmsg="${gmsg}\n• ENTER: ${enter}"
+    [ -n "${shift}" ] && gmsg="${gmsg}\n• SHIFT: ${shift}"
+    [ -n "${alternate}" ] && gmsg="${gmsg}\n• ALTERNATE: ${alternate}"
+
+    [ -n "$gmsg" ] || error "Instructions for special buttons not set!"
+
+    local base_instructions="Every gamepad button/axis results in one character and cannot be combined.\n\nThese inputs have special meaning:${gmsg}\n\n• Press and hold SHIFT or ALTERNATE and press a regular input to create a different character.\n• Press ENTER on its own to emulate pressing the enter key.\n• Press and hold SHIFT or ALTERNATE and press ENTER to delete the last character.\n• Press and hold SHIFT and ALTERNATE and press ENTER to deactivate the gamepad input translation."
     [ -z "${instructions}" ] || imsg="\n\nAdditional instructions for your device:\n${instructions}"
+
+    local prompt1_text="${intro_text}\n\n${passphrase_policy_text_gamepad}\n\n${base_instructions}${imsg}\n\nClick OK to finish your input."
+    local prompt2_text="Repeat the passphrase.\n\n${passphrase_policy_text_gamepad}\n\n${base_instructions}${imsg}\n\nClick OK to finish your input."
 
     while true; do
         true > "${passphrase_file}"
         final_arr1=()
         final_arr2=()
 
-        retval=0
+        # Ensure deckrypt is running
+        deckrypt_ensure_running "${passphrase_file}" deckrypt_pid
+
+        log "[prompt_passphrase_gamepad] prompting the user to enter a password"
+
         logging=false
-        key1="$(zenity --forms --add-password="Password:" --text="${intro_text}\n\n${base_instructions}${imsg}\n\nClick <b>OK</b> to finish your input." --title="${title}")" || retval=$?
+        d_opt --forms --width=500 --add-password="Password:" --text="${prompt1_text}" --title="${title}"
+        pw="${result}"
         logging=true
 
         tr -d '\0' < "${passphrase_file}" > "${passphrase_file_clean}"
@@ -270,16 +299,14 @@ prompt_passphrase_gamepad() {
         true > "${passphrase_file}"
         true > "${passphrase_file_clean}"
 
-        if [ "${retval}" -ne 0 ]; then
-            kill "${deckrypt_pid}" >/dev/null 2>&1 || true
-            wait "${deckrypt_pid}" >/dev/null 2>&1 || true
-            echo ""
-            return 0
-        fi
+        # Ensure deckrypt is running
+        deckrypt_ensure_running "${passphrase_file}" deckrypt_pid
 
-        retval=0
+        log "[prompt_passphrase_gamepad] prompting the user to repeat the password"
+
         logging=false
-        key2="$(zenity --forms --add-password="Password:" --text="Repeat the passphrase.\n\n${base_instructions}${imsg}\n\nClick <b>OK</b> to finish your input." --title="Repeat ${title}")" || retval=$?
+        d_opt --forms --width=500 --add-password="Password:" --text="${prompt2_text}" --title="${title}"
+        pw_check="${result}"
         logging=true
 
         tr -d '\0' < "${passphrase_file}" > "${passphrase_file_clean}"
@@ -287,17 +314,12 @@ prompt_passphrase_gamepad() {
         true > "${passphrase_file}"
         true > "${passphrase_file_clean}"
 
-        if [ "${retval}" -ne 0 ]; then
-            kill "${deckrypt_pid}" >/dev/null 2>&1 || true
-            wait "${deckrypt_pid}" >/dev/null 2>&1 || true
-            echo ""
-            return 0
-        fi
+        deckrypt_stop "${deckrypt_pid}"
 
         local i line
         for ((i=0; i<${#deckrypt_lines1[@]}; i++)); do
             line="${deckrypt_lines1[$i]}"
-            if [[ "$line" == *"(ENTER)"* || "$line" == *"(ESCAPE)"* ]]; then
+            if [[ "$line" == *"(ENTER)"* ]]; then
                 continue
             elif [[ "$line" == *"(BACKSPACE)"* ]]; then
                 if [ ${#final_arr1[@]} -gt 0 ]; then
@@ -311,7 +333,7 @@ prompt_passphrase_gamepad() {
 
         for ((i=0; i<${#deckrypt_lines2[@]}; i++)); do
             line="${deckrypt_lines2[$i]}"
-            if [[ "$line" == *"(ENTER)"* || "$line" == *"(ESCAPE)"* ]]; then
+            if [[ "$line" == *"(ENTER)"* ]]; then
                 continue
             elif [[ "$line" == *"(BACKSPACE)"* ]]; then
                 if [ ${#final_arr2[@]} -gt 0 ]; then
@@ -323,82 +345,150 @@ prompt_passphrase_gamepad() {
             fi
         done
 
-        if [ "$key1" != "$key2" ] || [ "${final_arr1[*]}" != "${final_arr2[*]}" ]; then
-            d --width=500 --warning --title="Passphrases do not match" \
-              --text="The passphrases you entered do not match. Please try again."
+        # User cancelled both dialogs -> treat as cancel
+        if [ -z "${pw}" ] && [ -z "${pw_check}" ]; then
+            log "[prompt_passphrase_gamepad] password prompts cancelled"
+            pw=""
+            break
+        fi
+
+        if [ "${pw}" != "${pw_check}" ] || [ "${final_arr1[*]}" != "${final_arr2[*]}" ]; then
+            log "[prompt_passphrase_gamepad] passphrases did not match"
+            d --warning --no-wrap --title="Passphrase did not match" --text="Please try again"
+            pw=""
+            pw_check=""
             continue
         fi
 
-        if ! validate_passphrase "${key1}"; then
-            d --warning --no-wrap --title="Passphrase does not meet requirements" --text="$(passphrase_policy_text)"
+        if ! validate_passphrase_gamepad "${pw}"; then
+            log "[prompt_passphrase_gamepad] passphrase invalid"
+            local rv=0
+            logging=false
+            d_opt --question --width=500 --title="Passphrase does not meet recommended rules" \
+                --ok-label="Try again" --cancel-label="Use anyway" \
+                --text="${passphrase_policy_text_gamepad}\n\nDo you want to use this passphrase anyway?"
+            rv=$?
+            logging=true
+
+            if [ "${rv}" -ne 0 ]; then
+                log "[prompt_passphrase_gamepad] invalid passphrase kept"
+                break
+            fi
+
+            pw=""
+            pw_check=""
+            log "[prompt_passphrase_gamepad] invalid passphrase reset"
             continue
         fi
 
-        if [ -n "${instructions}" ]; then
-            zenity --width=500 --info --text="Please switch your device back to regular mode.\n\nThe instructions were:\n${instructions}" --title="Switch device to regular mode" || true
-        fi
-
-        kill "${deckrypt_pid}" >/dev/null 2>&1 || true
-        wait "${deckrypt_pid}" >/dev/null 2>&1 || true
-
-        rm -f "${passphrase_file}" "${passphrase_file_clean}"
-
-        echo "${key1}"
-        return 0
+        break
     done
-}
 
-# --- Recovery key handling -----------------------------------------------------------------
+    if [ -n "${instructions}" ]; then
+        log "[prompt_passphrase_gamepad] instructing to switch device mode back"
+        d_opt --width=500 --info --text="Please switch your device back to regular mode.\n\nThe instructions were:\n${instructions}" --title="Switch device to regular mode"
+    fi
+
+    deckrypt_stop "${deckrypt_pid}"
+
+    rm -f "${passphrase_file}" "${passphrase_file_clean}"
+
+    # Save a friendly representation of gamepad inputs for later display/QR
+    local friendly=""
+    if [ "${#final_arr1[@]}" -gt 0 ]; then
+        friendly="$(IFS='-' ; echo "${final_arr1[*]}")"
+        friendly="${friendly//"-"/" -- "}"
+    fi
+    tik_recovery_gamepad_inputs="${friendly}"
+
+    tik_passphrase="${pw}"
+    log "[prompt_passphrase_gamepad] passphrase set"
+    return 0
+}
 
 collect_recoveryKey() {
     tik_progress_step "Recovery key setup" 0
     log "[collect_recoveryKey] collecting recovery key"
 
     [ -n "${tik_kbd_layout}" ] || select_keyboard_layout
+    local intro title title_repeat
+    intro="This ${TIK_OS_NAME} system is encrypted.\n\nYou must set a Recovery Key now.\n\nThe Recovery Key can be used to unlock the disk.\n\nFor more information please visit <tt>https://aeondesktop.org/encrypt</tt>"
+    title="Set Recovery Key"
+    title_repeat="Repeat Recovery Key"
 
-    local intro="This ${TIK_OS_NAME} system is encrypted.\n\nYou must set a Recovery Key now.\n\nIf the integrity checks fail on boot, the Recovery Key can be used to unlock the disk.\n\nFor more information please visit <tt>https://aeondesktop.org/encrypt</tt>"
+    local device_info ret_d
+    local use_keyboard="1"
+    device_info="$(/usr/bin/deckrypt -d -a 2>/dev/null)"
+    ret_d=$?
 
-    local chosen=""
-    if command -v /usr/bin/deckrypt >/dev/null 2>&1 && deckrypt_supported_controller_present; then
-        # Offer choice: use controller or keyboard
-        local use_gamepad=""
-        logging=false
+    local sysvendor productname
+    sysvendor="$(/usr/bin/cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '')"
+    productname="$(/usr/bin/cat /sys/class/dmi/id/product_name 2>/dev/null || echo '')"
+
+    tik_deckrypt_matched_line=""
+    local supported_device=
+    while IFS= read -r line; do
+        local vendor product
+        vendor="$(echo "$line" | grep -oP "Vendor:\s*'\K[^']+" || true)"
+        product="$(echo "$line" | grep -oP "Product:\s*'\K[^']+" || true)"
+        tik_deckrypt_matched_line="$line"
+        if [ "$vendor" = "$sysvendor" ] && [ "$product" = "$productname" ]; then
+            log "[collect_recoveryKey] supported device detected: ${vendor}: ${product}"
+            supported_device="1"
+            break
+        fi
+    done <<< "$device_info"
+
+    if [ "${ret_d}" -eq 0 ] && [ -n "${supported_device}" ]; then
+        local devname
+        devname="$(echo "${tik_deckrypt_matched_line}" | grep -oP "Device:\s*'\K[^']+" || true)"
+
+        d --width=500 --warning --title="Gamepad input" \
+          --text="We detected that you are running the installer on your <b>${devname}</b>.\n\nYou will now enter the passphrase for your new installation disk using the gamepad."
+        use_keyboard="0"
+    elif /usr/bin/deckrypt -t >/dev/null 2>&1; then
         d_opt --question --width=500 --title="Recovery Key input method" \
             --text="A supported controller has been detected.\n\nDo you want to enter the Recovery Key using the gamepad?\n\nChoose <b>No</b> to use the keyboard."
-        use_gamepad="${result}"
-        logging=true
-
-        # d_opt --question typically returns "true"/"false" in result for some wrappers;
-        # if wrapper behaves differently, fall back by checking exit status is not available here,
-        # so treat "true" / "yes" / "1" as gamepad.
-        if [[ "${use_gamepad}" =~ ^(true|yes|1)$ ]]; then
-            chosen="$(prompt_passphrase_gamepad "Set Recovery Key" "${intro}")"
-        else
-            chosen="$(prompt_passphrase_keyboard "Set Recovery Key" "${intro}")"
-        fi
-    else
-        chosen="$(prompt_passphrase_keyboard "Set Recovery Key" "${intro}")"
+        use_keyboard="$?"
     fi
 
-    [ -n "${chosen}" ] || error "Recovery Key was not set"
+    tik_progress_step "Setting passphrase" 30
 
-    key="${chosen}"
+    if [ "${use_keyboard}" -eq 1 ]; then
+        log "[collect_recoveryKey] prompting for passphrase entry with a keyboard"
+        prompt_passphrase_keyboard "$title" "$title_repeat" "$intro"
+    else
+        log "[collect_recoveryKey] prompting for passphrase entry with a gamepad"
+        prompt_passphrase_gamepad "$title" "$title_repeat" "$intro"
+    fi
+
+    [ -n "${tik_passphrase}" ] || error "Recovery Key was not set"
 
     log "[collect_recoveryKey] adding recovery key to roots sdbootutil user keyring"
     logging=false
-    pkexec keyctl add user sdbootutil "${key}" @u
+    pkexec keyctl add user sdbootutil "${tik_passphrase}" @u
     logging=true
 }
 
 display_recoveryKey() {
-    local defaultmsg="This ${TIK_OS_NAME} system is encrypted and checks its own integrity on every boot\nIn the event of these integrity checks failing, you will need to use the Recovery Key provided below to enter this system\n\nLikely reasons for integrity checks failing include:\n\n• Secure Boot changed from enabled or disabled\n• Boot drive was moved to a different computer\n• Disk partitions were changed\n• Boot loader or initrd were altered unexpectedly\n\nIf you are unaware as to why the system is requesting the recovery key, this systems security may have been compromised\nThe best course of action may be to not unlock the disk until you can determine what changed to require the Recovery Key\n\nThis systems Recovery Key is:\n\n        <b><big>${key}</big></b>\n\nPlease save this secret Recovery Key in a secure location\n\n"
-    local fallbackmsg="In addition to your Passphrase a Recovery Key has been set:\n\n        <b><big>${key}</big></b>\n\nPlease save this secret Recovery Key in a secure location\nIt may be used to regain access to this system if the other Passphrase becomes lost or forgotten\n\n"
+    local defaultmsg="This ${TIK_OS_NAME} system is encrypted and checks its own integrity on every boot\nIn the event of these integrity checks failing, you will need to use the Recovery Key provided below to enter this system\n\nLikely reasons for integrity checks failing include:\n\n• Secure Boot changed from enabled or disabled\n• Boot drive was moved to a different computer\n• Disk partitions were changed\n• Boot loader or initrd were altered unexpectedly\n\nIf you are unaware as to why the system is requesting the recovery key, this systems security may have been compromised\nThe best course of action may be to not unlock the disk until you can determine what changed to require the Recovery Key\n\n"
+    local fallbackmsg="This ${TIK_OS_NAME} system is encrypted\nOn every boot, you will need to use the Recovery Key you set before and provided below to enter this system\n\n"
+
     local message
     [ "${tik_encrypt_mode}" == 0 ] && message=${defaultmsg}
     [ "${tik_encrypt_mode}" == 1 ] && message=${fallbackmsg}
+
+    # If created via gamepad, also show the controller input sequence
+    local qr_payload=""
+    if [ -n "${tik_recovery_gamepad_inputs}" ]; then
+        qr_payload="recovery key: ${tik_passphrase}"$'\n'$'\n'"gamepad inputs: ${tik_recovery_gamepad_inputs}"
+    else
+        qr_payload="${tik_passphrase}"
+    fi
+
     log "[display_recoveryKey] displaying recovery key"
     logging=false
-    d --width=500 --height=500 --no-wrap --warning --icon=security-high-symbolic --title="Encryption Recovery Key" --text="${message}You may optionally scan the recovery key off screen:\n<span face='monospace'>$(qrencode ${key} -t UTF8i)</span>\nFor more information please visit <tt>https://aeondesktop.org/encrypt</tt>"
+    d --width=500 --height=500 --no-wrap --warning --icon=security-high-symbolic --title="Encryption Recovery Key" --text="${message}You may scan the recovery key off screen:\n<span face='monospace'>$(qrencode "${qr_payload}" -t UTF8i)</span>\nPlease save this secret Recovery Key in a secure location\n\nFor more information please visit <tt>https://aeondesktop.org/encrypt</tt>"
     logging=true
     log "[display_recoveryKey] recovery key dialogue dismissed"
 }
@@ -406,7 +496,7 @@ display_recoveryKey() {
 configure_encryption() {
     tik_target_mount "" "required"
 
-    tik_progress_step "Configuring encryption and boot" 20
+    tik_progress_step "Configuring encryption and boot" 45
 
     log "[configure_encryption] configuring cmdline, crypttab, PCR policy, fstab and populating ${TIK_ESP_PART}"
 
@@ -425,8 +515,8 @@ configure_encryption() {
 
     # Ensure chosen keyboard layout is configured for early boot
     if [ -n "${tik_kbd_layout}" ]; then
-        log "[configure_encryption] configuring installed system keyboard layout: layout=${tik_kbd_layout} variant=${tik_kbd_variant}"
-        set_keyboard_layout_installed_system "${tik_kbd_layout}" "${tik_kbd_variant}"
+        log "[configure_encryption] configuring installed system keyboard layout: layout=${tik_kbd_layout}"
+        set_keyboard_layout_installed_system "${tik_kbd_layout}"
     fi
 
     # FIXME: Dracut gets confused by previous installations on occasion with the default config, override the problematic option temporarily
@@ -435,7 +525,7 @@ configure_encryption() {
     # Install bootloader with sdbootutil
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" sdbootutil -vv --esp-path /boot/efi --no-variables install 1>&2
 
-    tik_progress_step "Enrolling recovery key" 40
+    tik_progress_step "Enrolling recovery key" 60
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" sdbootutil -vv --esp-path /boot/efi --method=recovery-key enroll 1>&2
 
     # If Default mode has been detected, configure PCR policy.
@@ -444,7 +534,7 @@ configure_encryption() {
     # present. See
     # https://github.com/openSUSE/sdbootutil/commit/8d3db8b01f5681c11054c37145aad3e3973a7741
     if [ "${tik_encrypt_mode}" == 0 ]; then
-        tik_progress_step "Enrolling TPM key" 60
+        tik_progress_step "Enrolling TPM key" 75
         # Explaining the chosen PCR list below
         # - 4 - Bootloader and drivers, should never recovery key as bootloader should only be updated with new PCR measurements
         # - 5 - GPT Partition table, should never require recovery key as partition layout shouldn't change
@@ -458,31 +548,17 @@ configure_encryption() {
         # - 3 - Firmware from pluggable hardware. Attaching hardware to your laptop shouldn't hinder booting
         prun /usr/bin/chroot "${TIK_ROOT_MNT}" sdbootutil -vv --esp-path /boot/efi --method=tpm2 enroll 1>&2
     else
-        tik_progress_step "Setting encryption passphrase" 60
-        d --width=500 --height=300 --no-wrap --warning --icon=security-high-symbolic --title="Set Encryption Passphrase" --text="This ${TIK_OS_NAME} system is encrypted and will require a Passphrase on every boot\n\nYou will be prompted to set the Passphrase on the next screen\n\nFor more information please visit <tt>https://aeondesktop.org/encrypt</tt>"
-        log "[configure_encryption] Fallback Mode - Prompting user for passphrase for ${TIK_CRYPT_PART}"
-
-        [ -n "${tik_kbd_layout}" ] || select_keyboard_layout
-
-        local pw=""
-        pw="$(prompt_passphrase_keyboard "Set Encryption Passphrase" "Set the boot passphrase.\n\n$(passphrase_policy_text)")"
-
-        # User cancelled -> no passphrase set, just continue
-        if [ -z "${pw}" ]; then
-            :
-        else
-            prun /usr/sbin/cryptsetup luksAddKey --key-file="${tik_keyfile}" --batch-mode --force-password "${TIK_CRYPT_PART}" <<<"${pw}"
-            # Initrd wasn't generated by install or enroll as no TPM interaction, so do it now.
-            prun /usr/bin/chroot "${TIK_ROOT_MNT}" sdbootutil -vv --esp-path /boot/efi mkinitrd 1>&2
-        fi
+        tik_progress_step "Enrolling passphrase" 75
+        prun /usr/sbin/cryptsetup luksAddKey --key-file="${tik_keyfile}" --batch-mode --force-password "${TIK_CRYPT_PART}" <<<"${tik_passphrase}"
+        # Initrd wasn't generated by install or enroll as no TPM interaction, so do it now.
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" sdbootutil -vv --esp-path /boot/efi mkinitrd 1>&2
     fi
 
     # FIXME: Dracut gets confused by previous installations on occasion with the default config, remove override now initrd done
     prun /usr/bin/rm "${TIK_ROOT_MNT}/etc/dracut.conf.d/99-tik.conf"
-    tik_progress_step "Encryption configuration complete" 80
+    tik_progress_step "Encryption configuration complete" 90
 }
 
-select_keyboard_layout
 collect_recoveryKey
 configure_encryption
 display_recoveryKey

@@ -1,14 +1,104 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: Copyright 2024 SUSE LLC
 # SPDX-FileCopyrightText: Copyright 2024 Richard Brown
+# SPDX-FileCopyrightText: Copyright 2026 Tobias Görgens
 
 mig_dir=/var/lib/tik/mig
 snap_dir=homebk
 home_size=0
 tik_stick_size=0
+pid=""
+
 if [ ! -d ${mig_dir} ]; then
     prun /usr/bin/mkdir -p ${mig_dir}
 fi
+
+deckrypt_start() {
+    log "[deckrypt_start] Starting deckrypt"
+    /usr/bin/deckrypt -c -a &
+    pid=$!
+}
+
+deckrypt_stop() {
+    log "[deckrypt_stop] Stopping deckrypt"
+    [ -n "$pid" ] || return 0
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+    pid=""
+}
+
+detect_wayland_compositor() {
+    # Return values: kwin | mutter | unknown
+    if pgrep -x kwin_wayland >/dev/null 2>&1 || pgrep -x kwin_wayland_wrapper >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] kwin detected"
+        echo "kwin"
+        return 0
+    fi
+    if pgrep -x gnome-shell >/dev/null 2>&1 || pgrep -x mutter >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] mutter detected"
+        echo "mutter"
+        return 0
+    fi
+    log "[detect_wayland_compositor] no known compositor detected"
+    echo "unknown"
+}
+
+set_keyboard_layout_session() {
+    local layout="${1}"
+
+    # Best effort for the current installer session.
+    # On Wayland, the compositor owns layout state; setxkbmap only affects Xwayland.
+    local comp
+    comp="$(detect_wayland_compositor)"
+
+    log "[set_keyboard_layout_session] setting keyboard layout for current session"
+
+    if [ "${XDG_SESSION_TYPE}" = "wayland" ]; then
+        if [ "${comp}" = "kwin" ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+            # KDE Plasma Wayland
+            kwriteconfig6 --file kxkbrc --group Layout --key Use true --notify >/dev/null 2>&1 || true
+            kwriteconfig6 --file kxkbrc --group Layout --key LayoutList "${layout}" --notify >/dev/null 2>&1 || true
+            kwriteconfig6 --file kxkbrc --group Layout --key Options "" --notify >/dev/null 2>&1 || true
+        elif [ "${comp}" = "mutter" ] && command -v gsettings >/dev/null 2>&1; then
+            # GNOME (mutter)
+            gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}')]" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Also set system defaults
+    if command -v localectl >/dev/null 2>&1; then
+        localectl set-x11-keymap "${layout}" >/dev/null 2>&1 || true
+        # Ensure console keymap follows
+        localectl set-keymap "${layout}" >/dev/null 2>&1 || true
+    fi
+}
+
+select_keyboard_layout() {
+    tik_progress_step "Selecting keyboard layout" 10
+    log "[select_keyboard_layout] selecting keyboard layout"
+
+    local layouts=()
+    if command -v localectl >/dev/null 2>&1; then
+        mapfile -t layouts < <(localectl list-x11-keymap-layouts 2>/dev/null | sed '/^\s*$/d' || true)
+    fi
+
+    if [ "${#layouts[@]}" -eq 0 ]; then
+        # Fallback to a minimal list if localectl isn't available in the installer environment
+        layouts=(us de fr gb it es)
+    fi
+
+    logging=false
+    d_opt --list --width=500 --height=500 \
+        --title="Keyboard layout" \
+        --text="Select the keyboard layout you will use to enter passphrases.\n\nThis will be applied now and configured for early boot on the installed system." \
+        --column="Layout" "${layouts[@]}"
+    tik_kbd_layout="${result}"
+    logging=true
+
+    [ -n "${tik_kbd_layout}" ] || error "No keyboard layout selected"
+
+    set_keyboard_layout_session "${tik_kbd_layout}"
+}
 
 if [ ! -z "$(ls -A ${mig_dir})" ]; then
     log "[mig] existing backup found"
@@ -45,11 +135,17 @@ if [ ! -z "$(ls -A ${mig_dir})" ]; then
     fi
 fi
 
+tik_progress_step "Starting migration module" 0
+
+[ -n "${tik_kbd_layout}" ] || select_keyboard_layout
+
 get_disk
 
 if [ -z "${skipbackup}" ]; then
+    deckrypt_start
     # Mount the existing system
     tik_target_mount "tik_old_root" "optional"
+    deckrypt_stop
     case "$?" in
         0) ;;
         *)
@@ -65,7 +161,7 @@ if [ -z "${skipbackup}" ]; then
         # Quotas may not be enabled, so qgroup show can fail. Fall back to du in that case.
         prun-opt /usr/sbin/btrfs quota show "${TIK_ROOT_MNT}/home" >/dev/null 2>&1
         if [ "${retval}" -eq 0 ]; then
-            tik_progress_step "Scanning existing /home (btrfs quotas)" 10
+            tik_progress_step "Scanning existing /home (btrfs quotas)" 20
             prun-opt /usr/sbin/btrfs quota rescan -w "${TIK_ROOT_MNT}/home" >/dev/null 2>&1
             if [ "${retval}" -eq 0 ]; then
                 home_size="$(prun-opt /usr/sbin/btrfs qgroup show --raw -f "${TIK_ROOT_MNT}/home" | awk 'NR==2{print $2}')"
@@ -80,7 +176,7 @@ if [ -z "${skipbackup}" ]; then
             home_size="$(prun /usr/bin/du -sb "${TIK_ROOT_MNT}/home" 2>/dev/null | awk '{print $1}')"
         fi
 
-        tik_progress_step "Checking available space" 25
+        tik_progress_step "Checking available space" 30
         tik_stick_size=$(prun /usr/sbin/btrfs fi usage --raw ${mig_dir} | grep estimated | awk '{print $3}')
         if [ -n "${home_size}" ] && [ -n "${tik_stick_size}" ]; then
             if [ "${home_size}" -gt "${tik_stick_size}" ]; then
@@ -114,16 +210,16 @@ if [ -z "${skipbackup}" ]; then
     if [ "${migrate}" == 1 ]; then
         # We're migrating, lets go!
         # Check for existing snapshot from interrupted backup and delete if it exists boo#1224824
-        tik_progress_step "Preparing /home snapshot" 35
+        tik_progress_step "Preparing /home snapshot" 40
         if [ -d "${TIK_ROOT_MNT}/home/${snap_dir}" ]; then
             prun /usr/sbin/btrfs subvolume delete "${TIK_ROOT_MNT}/home/${snap_dir}"
         fi
         prun /usr/sbin/btrfs subvolume snapshot -r "${TIK_ROOT_MNT}/home" "${TIK_ROOT_MNT}/home/${snap_dir}"
 
-        tik_progress_step "Backing up /home" 45
+        tik_progress_step "Backing up /home" 50
         (prun /usr/sbin/btrfs send "${TIK_ROOT_MNT}/home/${snap_dir}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive ${mig_dir}) 2>&1 >/dev/null
 
-        tik_progress_step "Cleaning up snapshot" 55
+        tik_progress_step "Cleaning up snapshot" 60
         prun /usr/sbin/btrfs subvolume delete "${TIK_ROOT_MNT}/home/${snap_dir}"
 
         # Probe for subvolumes nested beneath /home and back them up also
@@ -134,7 +230,7 @@ if [ -z "${skipbackup}" ]; then
                 subsubdirname=$(dirname $subsubvol)
                 prun /usr/sbin/btrfs subvolume snapshot -r "${TIK_ROOT_MNT}/home/${subsubvol}" "${TIK_ROOT_MNT}/home/${subsubvolname}"
 
-                tik_progress_step "Backing up containers" 65
+                tik_progress_step "Backing up containers" 70
                 (prun /usr/sbin/btrfs send "${TIK_ROOT_MNT}/home/${subsubvolname}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive ${mig_dir}/${snap_dir}/${subsubdirname}) 2>&1 >/dev/null
 
                 prun /usr/sbin/btrfs subvolume delete "${TIK_ROOT_MNT}/home/${subsubvolname}"
