@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright 2026 Tobias Görgens
+
+check_install_disk_size() {
+    tik_progress_step "Checking disk size requirements" 0
+
+    [ -n "${TIK_INSTALL_DEVICE}" ] || error "TIK_INSTALL_DEVICE is not set"
+    [ -b "${TIK_INSTALL_DEVICE}" ] || error "Selected install device is not a block device: ${TIK_INSTALL_DEVICE}"
+
+    # MemTotal is in kB.
+    local mem_kb mem_gib swap_gib min_gib
+    mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+    [ -n "${mem_kb}" ] || error "Could not read RAM size on this system"
+
+    mem_gib="$(( (mem_kb + 1048576 - 1) / 1048576 ))"
+
+    # swap = RAM + 1 GiB, minimum 2 GiB
+    swap_gib="$(( mem_gib + 1 ))"
+    if [ "${swap_gib}" -lt 2 ]; then
+        swap_gib=2
+    fi
+
+    # Minimum disk size:
+    # swap_size + 24 GiB headroom
+    min_gib="$(( swap_gib + 24 ))"
+
+    tik_progress_step "Reading selected disk size" 40
+    local disk_bytes disk_gib
+    disk_bytes="$(lsblk -b -n -d -r -o SIZE "${TIK_INSTALL_DEVICE}" 2>/dev/null | head -n1)"
+    [ -n "${disk_bytes}" ] || error "Could not determine size for ${TIK_INSTALL_DEVICE}"
+
+    disk_gib="$(( (disk_bytes + 1073741824 - 1) / 1073741824 ))"
+
+    log "[check_install_disk_size] Detected RAM: ~${mem_gib} GiB; swap: ${swap_gib} GiB; disk: ~${disk_gib} GiB; required: ${min_gib} GiB"
+
+    tik_progress_step "Validating disk size" 80
+    if [ "${disk_gib}" -lt "${min_gib}" ]; then
+        error "Selected disk <tt>${TIK_INSTALL_DEVICE}</tt> is too small.\n\nMinimum required size for this system is <b>${min_gib} GiB</b>.\nDetected disk size: <b>${disk_gib} GiB</b>."
+    fi
+
+    tik_progress_step "Disk size OK" 100
+    log "[check_install_disk_size] Disk size check passed"
+}
+
+get_disk
+check_install_disk_size
