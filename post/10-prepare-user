@@ -6,7 +6,8 @@ prepare_user() {
     tik_progress_step "Adding user" 10
     tik_target_mount "" "required"
 
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
+    # The startup script expects the user to have UID 1000
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m -u 1000 deck 1>&2
 
     # Fix SELinux labels for passwd/shadow using the target system's file_contexts
     # so passwd can modify them while SELinux stays enforcing.
