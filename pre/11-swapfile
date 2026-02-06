@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Tobias Görgens
 
 check_install_disk_size() {
-    tik_progress_step "Checking disk size requirements" 0
+    log "[check_install_disk_size] Checking disk size requirements"
 
     [ -n "${TIK_INSTALL_DEVICE}" ] || error "TIK_INSTALL_DEVICE is not set"
     [ -b "${TIK_INSTALL_DEVICE}" ] || error "Selected install device is not a block device: ${TIK_INSTALL_DEVICE}"
@@ -24,7 +24,7 @@ check_install_disk_size() {
     # swap_size + 24 GiB headroom
     min_gib="$(( swap_gib + 24 ))"
 
-    tik_progress_step "Reading selected disk size" 40
+    log "[check_install_disk_size] Reading selected disk size"
     local disk_bytes disk_gib
     disk_bytes="$(lsblk -b -n -d -r -o SIZE "${TIK_INSTALL_DEVICE}" 2>/dev/null | head -n1)"
     [ -n "${disk_bytes}" ] || error "Could not determine size for ${TIK_INSTALL_DEVICE}"
@@ -33,12 +33,10 @@ check_install_disk_size() {
 
     log "[check_install_disk_size] Detected RAM: ~${mem_gib} GiB; swap: ${swap_gib} GiB; disk: ~${disk_gib} GiB; required: ${min_gib} GiB"
 
-    tik_progress_step "Validating disk size" 80
     if [ "${disk_gib}" -lt "${min_gib}" ]; then
         error "Selected disk <tt>${TIK_INSTALL_DEVICE}</tt> is too small.\n\nMinimum required size for this system is <b>${min_gib} GiB</b>.\nDetected disk size: <b>${disk_gib} GiB</b>."
     fi
 
-    tik_progress_step "Disk size OK" 100
     log "[check_install_disk_size] Disk size check passed"
 }
 
