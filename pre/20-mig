@@ -130,6 +130,8 @@ if [ ! -z "$(ls -A ${mig_dir})" ]; then
         prun-opt /usr/bin/rmdir ${mig_dir}/openvpn
         prun-opt /usr/bin/rm -R ${mig_dir}/fprint/*
         prun-opt /usr/bin/rmdir ${mig_dir}/fprint
+        prun-opt /usr/bin/rm -R ${mig_dir}/gamescope-session-steam/*
+        prun-opt /usr/bin/rmdir ${mig_dir}/gamescope-session-steam
         prun-opt /usr/bin/rmdir ${mig_dir}/mnt
     fi
 fi
@@ -250,6 +252,8 @@ if [ -z "${skipbackup}" ]; then
         prun-opt /usr/bin/cp -a "${TIK_ROOT_MNT}/var/lib/bluetooth" ${mig_dir}/bluetooth
         prun-opt /usr/bin/cp -a "${TIK_ROOT_MNT}/var/lib/fprint" ${mig_dir}/fprint
         prun-opt /usr/bin/cp -a "${TIK_ROOT_MNT}/etc/openvpn" ${mig_dir}/openvpn
+        prun-opt /usr/bin/mkdir -p "${mig_dir}/gamescope-session-steam"
+        prun-opt /usr/bin/cp -a "${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf" ${mig_dir}/gamescope-session-steam/system.conf
 
         tik_progress_step "Migration backup prepared" 100
     fi

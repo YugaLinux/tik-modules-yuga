@@ -48,6 +48,7 @@ if [ "${migrate}" == 1 ]; then
     prun-opt /usr/bin/cp -a "${mig_dir}/bluetooth/"* "${TIK_ROOT_MNT}/var/lib/bluetooth"
     prun-opt /usr/bin/cp -a "${mig_dir}/fprint/"* "${TIK_ROOT_MNT}/var/lib/fprint"
     prun-opt /usr/bin/cp -a "${mig_dir}/openvpn/"* "${TIK_ROOT_MNT}/etc/openvpn"
+    prun-opt /usr/bin/cp -a "${mig_dir}/gamescope-session-steam/"* "${TIK_ROOT_MNT}/etc/gamescope-session-steam"
 
     log "[mig] deleting existing /home subvolume under ${TIK_ROOT_MNT}/mnt"
     tik_progress_step "Removing existing /home" 35
@@ -79,4 +80,52 @@ if [ "${migrate}" == 1 ]; then
     tik_unmount "${TIK_ROOT_MNT}/mnt"
 
     tik_progress_step "Migration restore complete" 100
+else
+    tik_progress_step "Adding user" 10
+    tik_target_mount "" "required"
+
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
+
+    # Fix SELinux labels for passwd/shadow using the target system's file_contexts
+    # so passwd can modify them while SELinux stays enforcing.
+    local selinux_cfg selinux_type fc_txt
+    selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
+    selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
+
+    fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
+    prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
+
+    # Required to allow password changes
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d deck 1>&2
+
+    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
+
+    SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
+    USERNAME="deck"
+    SESSION="gamescope-session-steam"
+
+    if [[ -f "$SYSCONF" ]]; then
+        if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
+            sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
+        else
+            printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
+        fi
+        if grep -q '^DEFAULT_SESSION=' "$SYSCONF"; then
+            sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
+        else
+            printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        fi
+    else
+        printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
+        printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+    fi
+
+    if [[ -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" ]]; then
+        tar xf ${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz -C ${TIK_ROOT_MNT}/home/deck/.local/share
+    fi
+
+    # Force a relabel on first boot
+    prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2 || true
+
+    tik_progress_step "User added" 100
 fi
