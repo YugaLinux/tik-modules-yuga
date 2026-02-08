@@ -74,7 +74,6 @@ set_keyboard_layout_session() {
 }
 
 select_keyboard_layout() {
-    tik_progress_step "Selecting keyboard layout" 10
     log "[select_keyboard_layout] selecting keyboard layout"
 
     local layouts=()
@@ -134,8 +133,6 @@ if [ ! -z "$(ls -A ${mig_dir})" ]; then
         prun-opt /usr/bin/rmdir ${mig_dir}/mnt
     fi
 fi
-
-tik_progress_step "Starting migration module" 0
 
 [ -n "${tik_kbd_layout}" ] || select_keyboard_layout
 

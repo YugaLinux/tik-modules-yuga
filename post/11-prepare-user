@@ -23,11 +23,28 @@ prepare_user() {
 
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
 
+    SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
+    USERNAME="deck"
+    SESSION="gamescope-session-steam"
+
+    if [[ -f "$SYSCONF" ]]; then
+        if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
+            sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
+        else
+            printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
+        fi
+        if grep -q '^DEFAULT_SESSION=' "$SYSCONF"; then
+            sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
+        else
+            printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        fi
+    else
+        printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
+        printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+    fi
+
     # Force a relabel on first boot
     prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2 || true
-
-    log "[prepare-user] Enable autologin for user"
-    prun /usr/bin/sed -i 's/DISPLAYMANAGER_AUTOLOGIN=.*/DISPLAYMANAGER_AUTOLOGIN="deck"/' "${TIK_ROOT_MNT}/etc/sysconfig/displaymanager"
 }
 
 prepare_user
