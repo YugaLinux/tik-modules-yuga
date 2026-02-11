@@ -106,26 +106,28 @@ else
 
     if [[ -f "$SYSCONF" ]]; then
         if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
-            sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
+            prun /usr/bin/sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
         else
-            printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
+            prun /usr/bin/printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
         fi
         if grep -q '^DEFAULT_SESSION=' "$SYSCONF"; then
-            sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
+            prun /usr/bin/sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
         else
-            printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+            prun /usr/bin/printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
         fi
     else
-        printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
-        printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        prun /usr/bin/printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
+        prun /usr/bin/printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
     fi
 
-    if [[ -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" ]]; then
-        tar xf ${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz -C ${TIK_ROOT_MNT}/home/deck/.local/share
+    if prun /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"; then
+        prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/deck/.local/share/Steam"
+        prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R deck:deck "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
     fi
 
     # Force a relabel on first boot
-    prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2 || true
+    prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2
 
     tik_progress_step "User added" 100
 fi
