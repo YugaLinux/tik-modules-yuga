@@ -5,7 +5,12 @@ intall_packages() {
     tik_progress_step "Installing required packages" 10
     tik_target_mount "" "required"
     prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/" ro false
+
+    # Prevents initrd regeneration for KMPs, see https://github.com/openSUSE/suse-module-tools/issues/127
+    prun /usr/bin/touch "${TIK_ROOT_MNT}/.buildenv"
+
     prun /usr/bin/chroot "${TIK_ROOT_MNT}" /usr/bin/env DISABLE_SNAPPER_ZYPP_PLUGIN=1 /usr/bin/zypper --non-interactive install patterns-yuga-nonredistributable 1>&2
+    prun /usr/bin/rm "${TIK_ROOT_MNT}/.buildenv"
     prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/" ro true
 }
 
