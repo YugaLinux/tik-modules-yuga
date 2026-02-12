@@ -123,7 +123,7 @@ else
     if prun /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"; then
         prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/deck/.local/share/Steam"
         prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
-        prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R deck:deck "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R deck:deck "/home/deck/.local/share/Steam" 1>&2
     fi
 
     # Force a relabel on first boot
