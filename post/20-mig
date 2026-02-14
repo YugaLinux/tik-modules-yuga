@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: Copyright 2024 Richard Brown
 # SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
 
+SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
+
 writemigdesktop() {
     prun-opt /usr/bin/tee "$1/.config/autostart/yuga-mig-firstboot.desktop" << "EOF"
 [Desktop Entry]
@@ -17,9 +19,29 @@ EOF
     prun-opt /usr/bin/chmod 666 "$1/.config/autostart/yuga-mig-firstboot.desktop"
 }
 
-if [ "${migrate}" == 1 ]; then
-    tik_target_mount "" "required"
+setup_startup_config() {
+    local USERNAME="$1"
+    local SESSION="$2"
+    if prun /usr/bin/test -f "$SYSCONF"; then
+        if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
+            prun /usr/bin/sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
+        else
+            prun /usr/bin/printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
+        fi
+        if grep -q '^DEFAULT_SESSION=' "$SYSCONF"; then
+            prun /usr/bin/sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
+        else
+            prun /usr/bin/printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        fi
+    else
+        prun /usr/bin/printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
+        prun /usr/bin/printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+    fi
+}
 
+tik_target_mount "" "required"
+
+if [ "${migrate}" == 1 ]; then
     [ -n "${TIK_ROOT_MNT}" ] || error "MIGRATION FAILED: TIK_ROOT_MNT not set"
     [ -n "${TIK_ROOT_DEV}" ] || error "MIGRATION FAILED: TIK_ROOT_DEV not set"
 
@@ -79,55 +101,74 @@ if [ "${migrate}" == 1 ]; then
 
     tik_unmount "${TIK_ROOT_MNT}/mnt"
 
+    # When we didn't migrate a config file, we probably come from a legacy system without it
+    if ! prun /usr/bin/test -f "$SYSCONF"; then
+        local USERNAME="deck"
+        local SESSION="gamescope-session-steam"
+        setup_startup_config "$USERNAME" "$SESSION"
+    fi
+
     tik_progress_step "Migration restore complete" 100
 else
-    tik_progress_step "Adding user" 10
-    tik_target_mount "" "required"
+    local device_info ret_d
+    device_info="$(/usr/bin/deckrypt -d -a 2>/dev/null)"
+    ret_d=$?
 
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
+    local sysvendor productname
+    sysvendor="$(/usr/bin/cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '')"
+    productname="$(/usr/bin/cat /sys/class/dmi/id/product_name 2>/dev/null || echo '')"
 
-    # Fix SELinux labels for passwd/shadow using the target system's file_contexts
-    # so passwd can modify them while SELinux stays enforcing.
-    local selinux_cfg selinux_type fc_txt
-    selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
-    selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
-
-    fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
-    prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
-
-    # Required to allow password changes
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d deck 1>&2
-
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
-
-    SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
-    USERNAME="deck"
-    SESSION="gamescope-session-steam"
-
-    if [[ -f "$SYSCONF" ]]; then
-        if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
-            prun /usr/bin/sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
-        else
-            prun /usr/bin/printf '\nDEFAULT_USER="%s"\n' "$USERNAME" >> "$SYSCONF"
+    tik_deckrypt_matched_line=""
+    local supported_device=
+    while IFS= read -r line; do
+        local vendor product
+        vendor="$(echo "$line" | grep -oP "Vendor:\s*'\K[^']+" || true)"
+        product="$(echo "$line" | grep -oP "Product:\s*'\K[^']+" || true)"
+        tik_deckrypt_matched_line="$line"
+        if [ "$vendor" = "$sysvendor" ] && [ "$product" = "$productname" ]; then
+            log "[mig] supported device detected: ${vendor}: ${product}"
+            supported_device="1"
+            break
         fi
-        if grep -q '^DEFAULT_SESSION=' "$SYSCONF"; then
-            prun /usr/bin/sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
-        else
-            prun /usr/bin/printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+    done <<< "$device_info"
+
+    # We only create a user when we are on a supported device, so probably a device meant to be used for gaming.
+    # Otherwise, we rely on the first boot wizard of the DE to setup the user account.
+    if [ "${ret_d}" -eq 0 ] && [ -n "${supported_device}" ]; then
+        tik_progress_step "Adding user" 10
+        local USERNAME="deck"
+        local SESSION="gamescope-session-steam"
+
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m "$USERNAME" 1>&2
+
+        # Fix SELinux labels for passwd/shadow using the target system's file_contexts
+        # so passwd can modify them while SELinux stays enforcing.
+        local selinux_cfg selinux_type fc_txt
+        selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
+        selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
+
+        fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
+        prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
+
+        # Required to allow password changes
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d "$USERNAME" 1>&2
+
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel "$USERNAME" 1>&2
+
+        if prun /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"; then
+            prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/"$USERNAME"/.local/share/Steam"
+            prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/"$USERNAME"/.local/share/Steam" 1>&2
+            prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R "$USERNAME":"$USERNAME" "/home/"$USERNAME"/.local/share/Steam" 1>&2
         fi
+
+        setup_startup_config "$USERNAME" "$SESSION"
+
+        tik_progress_step "User added" 100
     else
-        prun /usr/bin/printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
-        prun /usr/bin/printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        # Let's create an empty config for later
+        setup_startup_config "" ""
     fi
-
-    if prun /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"; then
-        prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/deck/.local/share/Steam"
-        prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
-        prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R deck:deck "/home/deck/.local/share/Steam" 1>&2
-    fi
-
-    # Force a relabel on first boot
-    prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2
-
-    tik_progress_step "User added" 100
 fi
+
+# Force a relabel on first boot
+prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2
