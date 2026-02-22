@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: Copyright 2024 SUSE LLC
 # SPDX-FileCopyrightText: Copyright 2024 Richard Brown
-# SPDX-FileCopyrightText: Copyright 2025 Tobias Görgens
+# SPDX-FileCopyrightText: Copyright 2026 Tobias Görgens
+
+SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
 
 writemigdesktop() {
     prun-opt /usr/bin/tee "$1/.config/autostart/yuga-mig-firstboot.desktop" << "EOF"
@@ -17,94 +19,12 @@ EOF
     prun-opt /usr/bin/chmod 666 "$1/.config/autostart/yuga-mig-firstboot.desktop"
 }
 
-if [ "${migrate}" == 1 ]; then
-    tik_target_mount "" "required"
-
-    [ -n "${TIK_ROOT_MNT}" ] || error "MIGRATION FAILED: TIK_ROOT_MNT not set"
-    [ -n "${TIK_ROOT_DEV}" ] || error "MIGRATION FAILED: TIK_ROOT_DEV not set"
-
-    tik_progress_step "Preparing migration restore" 0
-
-    prun /usr/bin/mkdir -p "${TIK_ROOT_MNT}/mnt"
-
-    tik_unmount "${TIK_ROOT_MNT}/home"
-    tik_mount "${TIK_ROOT_DEV}" "mnt" "compress=zstd:1,subvol=/@"
-
-    tik_progress_step "Applying target repart configuration" 10
-    prun /usr/bin/systemd-repart --pretty 0 --root "${TIK_ROOT_MNT}" --dry-run=0 "${TIK_ROOT_DEV}"
-
-    tik_progress_step "Restoring user/account data" 25
-    prun /usr/bin/cat "${mig_dir}/passwd.out" | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/passwd"
-    prun /usr/bin/cat "${mig_dir}/group.out"  | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/group"
-    prun /usr/bin/cat "${mig_dir}/shadow.out" | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/shadow"
-    prun /usr/bin/sed -i "/^wheel:/ s/$/$(head -n 1 "${mig_dir}/passwd.out" | awk -F'[/:]' '{print $1}')/" "${TIK_ROOT_MNT}/etc/group"
-    prun /usr/bin/cp -a "${mig_dir}/subuid" "${TIK_ROOT_MNT}/etc/subuid"
-    prun /usr/bin/cp -a "${mig_dir}/subgid" "${TIK_ROOT_MNT}/etc/subgid"
-    # It's not guaranteed that the system will have existing network configs, localtime or AccountsService
-    prun-opt /usr/bin/cp -a "${mig_dir}/system-connections/"* "${TIK_ROOT_MNT}/etc/NetworkManager/system-connections"
-    prun-opt /usr/bin/cp -a "${mig_dir}/localtime" "${TIK_ROOT_MNT}/etc/localtime"
-    prun-opt /usr/bin/cp -a "${mig_dir}/users/"* "${TIK_ROOT_MNT}/var/lib/AccountsService/users"
-    prun-opt /usr/bin/cp -a "${mig_dir}/icons/"* "${TIK_ROOT_MNT}/var/lib/AccountsService/icons"
-    prun-opt /usr/bin/cp -a "${mig_dir}/bluetooth/"* "${TIK_ROOT_MNT}/var/lib/bluetooth"
-    prun-opt /usr/bin/cp -a "${mig_dir}/fprint/"* "${TIK_ROOT_MNT}/var/lib/fprint"
-    prun-opt /usr/bin/cp -a "${mig_dir}/openvpn/"* "${TIK_ROOT_MNT}/etc/openvpn"
-    prun-opt /usr/bin/cp -a "${mig_dir}/gamescope-session-steam/"* "${TIK_ROOT_MNT}/etc/gamescope-session-steam"
-
-    log "[mig] deleting existing /home subvolume under ${TIK_ROOT_MNT}/mnt"
-    tik_progress_step "Removing existing /home" 35
-    prun /usr/sbin/btrfs subvolume delete "${TIK_ROOT_MNT}/mnt/home"
-
-    tik_progress_step "Restoring /home" 55
-    (prun /usr/sbin/btrfs send "${mig_dir}/${snap_dir}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive "${TIK_ROOT_MNT}/mnt") 2>&1 >/dev/null
-
-    prun /usr/bin/mv "${TIK_ROOT_MNT}/mnt/${snap_dir}" "${TIK_ROOT_MNT}/mnt/home"
-    prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/mnt/home" ro false
-
-    for subsubvol in $(prun-opt /usr/sbin/btrfs subvolume list -o "${mig_dir}/${snap_dir}" --sort=path | rev | cut -f1 -d' ' | rev | sed 's/^@//'); do
-        subsubvolname="$(basename "$subsubvol")"
-        subsubdirname="$(dirname "$subsubvol" | awk -F "${mig_dir}/${snap_dir}" '{print $2}')"
-
-        tik_progress_step "Restoring containers" 70
-        (prun /usr/sbin/btrfs send "${subsubvol}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive "${TIK_ROOT_MNT}/mnt/home/${subsubdirname}") 2>&1 >/dev/null
-
-        prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/mnt/home/${subsubdirname}/${subsubvolname}" ro false
-        prun-opt /usr/bin/sed -i 's/driver = "overlay"/driver = "btrfs"/g' "${TIK_ROOT_MNT}/mnt/etc/containers/storage.conf"
-    done
-    tik_mount "${TIK_ROOT_DEV}" "home" "compress=zstd:1,subvol=/@/home"
-
-    tik_progress_step "Writing firstboot autostart entries" 90
-    for userhome in "${TIK_ROOT_MNT}/mnt/home"/*/; do
-        writemigdesktop "${userhome}"
-    done
-
-    tik_unmount "${TIK_ROOT_MNT}/mnt"
-
-    tik_progress_step "Migration restore complete" 100
-else
-    tik_progress_step "Adding user" 10
-    tik_target_mount "" "required"
-
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m deck 1>&2
-
-    # Fix SELinux labels for passwd/shadow using the target system's file_contexts
-    # so passwd can modify them while SELinux stays enforcing.
-    local selinux_cfg selinux_type fc_txt
-    selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
-    selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
-
-    fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
-    prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
-
-    # Required to allow password changes
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d deck 1>&2
-
-    prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel deck 1>&2
-
-    SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
-    USERNAME="deck"
-    SESSION="gamescope-session-steam"
-
-    if [[ -f "$SYSCONF" ]]; then
+setup_startup_config() {
+    local USERNAME="$1"
+    local SESSION="$2"
+    local DESKTOP_SESSION="$3"
+    prun-opt /usr/bin/test -f "$SYSCONF"
+    if [ "$retval" = "0" ]; then
         if grep -q '^DEFAULT_USER=' "$SYSCONF"; then
             prun /usr/bin/sed -i "s|^DEFAULT_USER=.*|DEFAULT_USER=\"${USERNAME}\"|g" "$SYSCONF"
         else
@@ -115,19 +35,343 @@ else
         else
             prun /usr/bin/printf '\nDEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
         fi
+        if grep -q '^DESKTOP_SESSION=' "$SYSCONF"; then
+            prun /usr/bin/sed -i "s|^DESKTOP_SESSION=.*|DESKTOP_SESSION=\"${DESKTOP_SESSION}\"|g" "$SYSCONF"
+        else
+            prun /usr/bin/printf '\nDESKTOP_SESSION="%s"\n' "$DESKTOP_SESSION" >> "$SYSCONF"
+        fi
     else
         prun /usr/bin/printf 'DEFAULT_USER="%s"\n' "$USERNAME" > "$SYSCONF"
         prun /usr/bin/printf 'DEFAULT_SESSION="%s"\n' "$SESSION" >> "$SYSCONF"
+        prun /usr/bin/printf 'DESKTOP_SESSION="%s"\n' "$DESKTOP_SESSION" >> "$SYSCONF"
+    fi
+}
+
+detect_wayland_compositor() {
+    # Return values: kwin | mutter | unknown
+    if pgrep -x kwin_wayland >/dev/null 2>&1 || pgrep -x kwin_wayland_wrapper >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] kwin detected"
+        echo "kwin"
+        return 0
+    fi
+    if pgrep -x gnome-shell >/dev/null 2>&1 || pgrep -x mutter >/dev/null 2>&1; then
+        log "[detect_wayland_compositor] mutter detected"
+        echo "mutter"
+        return 0
+    fi
+    log "[detect_wayland_compositor] no known compositor detected"
+    echo "unknown"
+}
+
+set_keyboard_layout_session() {
+    local layout="${1}"
+
+    # Best effort for the current installer session.
+    # On Wayland, the compositor owns layout state; setxkbmap only affects Xwayland.
+    local comp
+    comp="$(detect_wayland_compositor)"
+
+    log "[set_keyboard_layout_session] setting keyboard layout for current session"
+
+    if [ "${XDG_SESSION_TYPE}" = "wayland" ]; then
+        if [ "${comp}" = "kwin" ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+            # KDE Plasma Wayland
+            kwriteconfig6 --file kxkbrc --group Layout --key Use true --notify >/dev/null 2>&1 || true
+            kwriteconfig6 --file kxkbrc --group Layout --key LayoutList "${layout}" --notify >/dev/null 2>&1 || true
+            kwriteconfig6 --file kxkbrc --group Layout --key Options "" --notify >/dev/null 2>&1 || true
+        elif [ "${comp}" = "mutter" ] && command -v gsettings >/dev/null 2>&1; then
+            # GNOME (mutter)
+            gsettings set org.gnome.desktop.input-sources sources "[('xkb', '${layout}')]" >/dev/null 2>&1 || true
+        fi
     fi
 
-    if prun /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"; then
-        prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/deck/.local/share/Steam"
-        prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/deck/.local/share/Steam" 1>&2
-        prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R deck:deck "/home/deck/.local/share/Steam" 1>&2
+    # Also set system defaults
+    if command -v localectl >/dev/null 2>&1; then
+        localectl set-x11-keymap "${layout}" >/dev/null 2>&1 || true
+        # Ensure console keymap follows
+        localectl set-keymap "${layout}" >/dev/null 2>&1 || true
+    fi
+}
+
+select_keyboard_layout() {
+    tik_progress_step "Selecting keyboard layout" 15
+    log "[select_keyboard_layout] selecting keyboard layout"
+
+    local layouts=()
+    if command -v localectl >/dev/null 2>&1; then
+        mapfile -t layouts < <(localectl list-x11-keymap-layouts 2>/dev/null | sed '/^\s*$/d' || true)
+    fi
+
+    if [ "${#layouts[@]}" -eq 0 ]; then
+        # Fallback to a minimal list if localectl isn't available in the installer environment
+        layouts=(us de fr gb it es)
+    fi
+
+    logging=false
+    d_opt --list --width=500 --height=500 \
+        --title="Keyboard layout" \
+        --text="Select the keyboard layout you will use to enter passphrases.\n\nThis will be applied now and configured for early boot on the installed system." \
+        --column="Layout" "${layouts[@]}"
+    tik_kbd_layout="${result}"
+    logging=true
+
+    [ -n "${tik_kbd_layout}" ] || error "No keyboard layout selected"
+
+    set_keyboard_layout_session "${tik_kbd_layout}"
+}
+
+# - must be 1..32 chars
+# - start with lowercase letter or underscore
+# - then lowercase letters, digits, underscores, hyphens allowed
+# - no spaces, no uppercase, no dots
+# - must not already exist in target /etc/passwd
+
+username_policy_text="A valid username must follow these rules:\n\n• 1–32 characters\n• Starts with a lowercase letter (a-z) or underscore (_)\n• Only lowercase letters, numbers, underscore (_) and hyphen (-)\n• No spaces, uppercase letters, or dots\n\nExamples: deck, alice, user_1, yuga"
+
+validate_username_syntax() {
+    local u="$1"
+
+    # empty
+    [ -n "${u}" ] || return 1
+
+    # length 1..32
+    [ "${#u}" -ge 1 ] || return 1
+    [ "${#u}" -le 32 ] || return 1
+
+    # start char + allowed chars
+    [[ "${u}" =~ ^[a-z_][a-z0-9_-]*$ ]] || return 1
+
+    # avoid reserved special names
+    case "${u}" in
+        root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+username_exists_in_target() {
+    local u="$1"
+    # Check target passwd to avoid collisions
+    grep -qE "^${u}:" "${TIK_ROOT_MNT}/etc/passwd" 2>/dev/null
+}
+
+prompt_username() {
+    local title="Select Username"
+    local intro_text="Please enter a username for your new system."
+
+    local u=""
+    while true; do
+        log "[prompt_username] prompting the user to enter a username"
+        logging=false
+        d --entry --text="${intro_text}\n\n${username_policy_text}\n\nClick OK to finish your input." --title="${title}"
+        u="${result}"
+        logging=true
+
+        if ! validate_username_syntax "${u}"; then
+            log "[prompt_username] username invalid syntax: ${u}"
+            d --warning --no-wrap --title="Invalid username" --text="${username_policy_text}\n\nPlease try again."
+            continue
+        fi
+
+        if username_exists_in_target "${u}"; then
+            log "[prompt_username] username already exists in target: ${u}"
+            d --warning --no-wrap --title="Username already exists" --text="The username <tt>${u}</tt> already exists on the installed system.\n\nPlease choose a different username."
+            continue
+        fi
+
+        break
+    done
+
+    tik_username="${u}"
+    [ -n "${tik_username}" ] || return 1
+    return 0
+}
+
+maybe_migrate() {
+    tik_target_mount "" "required"
+
+    if [ "${migrate}" == 1 ]; then
+        [ -n "${TIK_ROOT_MNT}" ] || error "MIGRATION FAILED: TIK_ROOT_MNT not set"
+        [ -n "${TIK_ROOT_DEV}" ] || error "MIGRATION FAILED: TIK_ROOT_DEV not set"
+
+        tik_progress_step "Preparing migration restore" 0
+
+        prun /usr/bin/mkdir -p "${TIK_ROOT_MNT}/mnt"
+
+        tik_unmount "${TIK_ROOT_MNT}/home"
+        tik_mount "${TIK_ROOT_DEV}" "mnt" "compress=zstd:1,subvol=/@"
+
+        tik_progress_step "Applying target repart configuration" 10
+        prun /usr/bin/systemd-repart --pretty 0 --root "${TIK_ROOT_MNT}" --dry-run=0 "${TIK_ROOT_DEV}"
+
+        tik_progress_step "Restoring user/account data" 25
+        prun /usr/bin/cat "${mig_dir}/passwd.out" | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/passwd"
+        prun /usr/bin/cat "${mig_dir}/group.out"  | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/group"
+        prun /usr/bin/cat "${mig_dir}/shadow.out" | prun /usr/bin/tee -a "${TIK_ROOT_MNT}/etc/shadow"
+        prun /usr/bin/sed -i "/^wheel:/ s/$/$(head -n 1 "${mig_dir}/passwd.out" | awk -F'[/:]' '{print $1}')/" "${TIK_ROOT_MNT}/etc/group"
+        prun /usr/bin/cp -a "${mig_dir}/subuid" "${TIK_ROOT_MNT}/etc/subuid"
+        prun /usr/bin/cp -a "${mig_dir}/subgid" "${TIK_ROOT_MNT}/etc/subgid"
+        # It's not guaranteed that the system will have existing network configs, localtime or AccountsService
+        prun-opt /usr/bin/cp -a "${mig_dir}/system-connections/"* "${TIK_ROOT_MNT}/etc/NetworkManager/system-connections"
+        prun-opt /usr/bin/cp -a "${mig_dir}/localtime" "${TIK_ROOT_MNT}/etc/localtime"
+        prun-opt /usr/bin/cp -a "${mig_dir}/users/"* "${TIK_ROOT_MNT}/var/lib/AccountsService/users"
+        prun-opt /usr/bin/cp -a "${mig_dir}/icons/"* "${TIK_ROOT_MNT}/var/lib/AccountsService/icons"
+        prun-opt /usr/bin/cp -a "${mig_dir}/bluetooth/"* "${TIK_ROOT_MNT}/var/lib/bluetooth"
+        prun-opt /usr/bin/cp -a "${mig_dir}/fprint/"* "${TIK_ROOT_MNT}/var/lib/fprint"
+        prun-opt /usr/bin/cp -a "${mig_dir}/openvpn/"* "${TIK_ROOT_MNT}/etc/openvpn"
+        prun-opt /usr/bin/cp -a "${mig_dir}/gamescope-session-steam/"* "${TIK_ROOT_MNT}/etc/gamescope-session-steam"
+
+        log "[mig] deleting existing /home subvolume under ${TIK_ROOT_MNT}/mnt"
+        tik_progress_step "Removing existing /home" 35
+        prun /usr/sbin/btrfs subvolume delete "${TIK_ROOT_MNT}/mnt/home"
+
+        tik_progress_step "Restoring /home" 55
+        (prun /usr/sbin/btrfs send "${mig_dir}/${snap_dir}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive "${TIK_ROOT_MNT}/mnt") 2>&1 >/dev/null
+
+        prun /usr/bin/mv "${TIK_ROOT_MNT}/mnt/${snap_dir}" "${TIK_ROOT_MNT}/mnt/home"
+        prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/mnt/home" ro false
+
+        for subsubvol in $(prun-opt /usr/sbin/btrfs subvolume list -o "${mig_dir}/${snap_dir}" --sort=path | rev | cut -f1 -d' ' | rev | sed 's/^@//'); do
+            subsubvolname="$(basename "$subsubvol")"
+            subsubdirname="$(dirname "$subsubvol" | awk -F "${mig_dir}/${snap_dir}" '{print $2}')"
+
+            tik_progress_step "Restoring containers" 70
+            (prun /usr/sbin/btrfs send "${subsubvol}" | pv -f -F "# %b copied in %t %r" | prun /usr/sbin/btrfs receive "${TIK_ROOT_MNT}/mnt/home/${subsubdirname}") 2>&1 >/dev/null
+
+            prun /usr/sbin/btrfs property set -f -ts "${TIK_ROOT_MNT}/mnt/home/${subsubdirname}/${subsubvolname}" ro false
+            prun-opt /usr/bin/sed -i 's/driver = "overlay"/driver = "btrfs"/g' "${TIK_ROOT_MNT}/mnt/etc/containers/storage.conf"
+        done
+        tik_mount "${TIK_ROOT_DEV}" "home" "compress=zstd:1,subvol=/@/home"
+
+        tik_progress_step "Writing firstboot autostart entries" 90
+        for userhome in "${TIK_ROOT_MNT}/mnt/home"/*/; do
+            writemigdesktop "${userhome}"
+        done
+
+        tik_unmount "${TIK_ROOT_MNT}/mnt"
+        
+        local SESSION="gamescope-session-steam"
+
+        # When we didn't migrate a config file, we probably come from a legacy system without it
+        if ! prun /usr/bin/test -f "$SYSCONF"; then
+            local USERNAME="deck"
+            setup_startup_config "$USERNAME" "$SESSION" ""
+        fi
+        
+        # Best effort for the current installer session.
+        # If we install from KDE Plasma, the final system will also have KDE Plasma, same for GNOME.
+        local comp
+        comp="$(detect_wayland_compositor)"
+
+        log "[mig] Detecting desktop session..."
+
+        if [ "${XDG_SESSION_TYPE}" = "wayland" ]; then
+            if [ "${comp}" = "kwin" ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+                # KDE Plasma Wayland
+                local DESKTOP_SESSION="plasmawayland"
+            elif [ "${comp}" = "mutter" ] && command -v gsettings >/dev/null 2>&1; then
+                # GNOME (mutter)
+                local DESKTOP_SESSION="gnome-wayland"
+            fi
+        fi
+        
+        # We just replace the desktop session and startup session since the username config might have been migrated
+        # At this point we know that the config has either been migrated or we just created it.
+        prun /usr/bin/sed -i "s|^DEFAULT_SESSION=.*|DEFAULT_SESSION=\"${SESSION}\"|g" "$SYSCONF"
+        prun /usr/bin/sed -i "s|^DESKTOP_SESSION=.*|DESKTOP_SESSION=\"${DESKTOP_SESSION}\"|g" "$SYSCONF"
+
+        tik_progress_step "Migration restore complete" 100
+    else
+        tik_progress_step "Adding user" 10
+
+        local device_info ret_d
+        device_info="$(/usr/bin/deckrypt -d -a 2>/dev/null)"
+        ret_d=$?
+
+        local sysvendor productname
+        sysvendor="$(/usr/bin/cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '')"
+        productname="$(/usr/bin/cat /sys/class/dmi/id/product_name 2>/dev/null || echo '')"
+
+        tik_deckrypt_matched_line=""
+        local supported_device=
+        while IFS= read -r line; do
+            local vendor product
+            vendor="$(echo "$line" | grep -oP "Vendor:\s*'\K[^']+" || true)"
+            product="$(echo "$line" | grep -oP "Product:\s*'\K[^']+" || true)"
+            tik_deckrypt_matched_line="$line"
+            if [ "$vendor" = "$sysvendor" ] && [ "$product" = "$productname" ]; then
+                log "[mig] supported device detected: ${vendor}: ${product}"
+                supported_device="1"
+                break
+            fi
+        done <<< "$device_info"
+
+        # We only create the "deck" user when we are on a supported device, so probably a device meant to be used for gaming.
+        # Otherwise, we let the user enter a username.
+        if [ "${ret_d}" -eq 0 ] && [ -n "${supported_device}" ]; then
+            local USERNAME="deck"
+        else
+            [ -n "${tik_kbd_layout}" ] || select_keyboard_layout
+
+            log "[mig] Setting username for final system"
+            if ! prompt_username; then
+                error "No valid username selected"
+            fi
+            local USERNAME="${tik_username}"
+        fi
+        
+        local SESSION="gamescope-session-steam"
+
+        # Best effort for the current installer session.
+        # On Wayland, the compositor owns layout state; setxkbmap only affects Xwayland.
+        local comp
+        comp="$(detect_wayland_compositor)"
+
+        log "[mig] Detecting desktop session..."
+
+        if [ "${XDG_SESSION_TYPE}" = "wayland" ]; then
+            if [ "${comp}" = "kwin" ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+                # KDE Plasma Wayland
+                local DESKTOP_SESSION="plasmawayland"
+            elif [ "${comp}" = "mutter" ] && command -v gsettings >/dev/null 2>&1; then
+                # GNOME (mutter)
+                local DESKTOP_SESSION="gnome-wayland"
+            fi
+        fi
+            
+
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" useradd -m "$USERNAME" 1>&2
+ 
+        # Fix SELinux labels for passwd/shadow using the target system's file_contexts
+        # so passwd can modify them while SELinux stays enforcing.
+        local selinux_cfg selinux_type fc_txt
+        selinux_cfg="${TIK_ROOT_MNT}/etc/selinux/config"
+        selinux_type="$(grep -E '^SELINUXTYPE=' "${selinux_cfg}" | cut -d= -f2 || true)"
+ 
+        fc_txt="${TIK_ROOT_MNT}/etc/selinux/${selinux_type}/contexts/files/file_contexts"
+        prun /sbin/setfiles -F -r "${TIK_ROOT_MNT}" "${fc_txt}" "${TIK_ROOT_MNT}/etc/passwd" "${TIK_ROOT_MNT}/etc/shadow" 1>&2
+ 
+        # Required to allow password changes
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" passwd -d "$USERNAME" 1>&2
+ 
+        prun /usr/bin/chroot "${TIK_ROOT_MNT}" usermod -a -G wheel "$USERNAME" 1>&2
+ 
+        prun-opt /usr/bin/test -f "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz"
+        if [ "$retval" = "0" ]; then
+            prun /usr/bin/mkdir "${TIK_ROOT_MNT}/home/"$USERNAME"/.local/share/Steam"
+            prun /usr/bin/tar xf "${TIK_ROOT_MNT}/usr/share/gamescope-session-plus/bootstrap_steam.tar.gz" -C "${TIK_ROOT_MNT}/home/"$USERNAME"/.local/share/Steam" 1>&2
+            prun /usr/bin/chroot "${TIK_ROOT_MNT}" chown -R "$USERNAME":"$USERNAME" "/home/"$USERNAME"/.local/share/Steam" 1>&2
+        fi
+ 
+        setup_startup_config "$USERNAME" "$SESSION" "$DESKTOP_SESSION"
+ 
+        tik_progress_step "User added" 100
     fi
 
     # Force a relabel on first boot
     prun /usr/bin/touch "${TIK_ROOT_MNT}/etc/selinux/.autorelabel" 1>&2
+}
 
-    tik_progress_step "User added" 100
-fi
+maybe_migrate
