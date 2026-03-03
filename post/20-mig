@@ -5,20 +5,6 @@
 
 SYSCONF="${TIK_ROOT_MNT}/etc/gamescope-session-steam/system.conf"
 
-writemigdesktop() {
-    prun-opt /usr/bin/tee "$1/.config/autostart/yuga-mig-firstboot.desktop" << "EOF"
-[Desktop Entry]
-Name=Yuga Migration FirstBoot Setup
-Comment=Sets up Yuga Correctly On FirstBoot after Migration
-Exec=/usr/bin/yuga-mig-firstboot
-Icon=org.gnome.Terminal
-Type=Application
-Categories=Utility;System;
-Name[en_GB]=startup
-EOF
-    prun-opt /usr/bin/chmod 666 "$1/.config/autostart/yuga-mig-firstboot.desktop"
-}
-
 setup_startup_config() {
     local USERNAME="$1"
     local SESSION="$2"
@@ -245,9 +231,10 @@ maybe_migrate() {
         done
         tik_mount "${TIK_ROOT_DEV}" "home" "compress=zstd:1,subvol=/@/home"
 
-        tik_progress_step "Writing firstboot autostart entries" 90
+        tik_progress_step "Writing firstboot migration marker" 90
         for userhome in "${TIK_ROOT_MNT}/mnt/home"/*/; do
-            writemigdesktop "${userhome}"
+            mkdir -p "${userhome}.local/share/firstboot"
+            touch "${userhome}/.local/share/firstboot/.migrated"
         done
 
         tik_unmount "${TIK_ROOT_MNT}/mnt"
